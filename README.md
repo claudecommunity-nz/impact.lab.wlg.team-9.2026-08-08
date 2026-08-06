@@ -9,9 +9,13 @@ Saturday 8 August 2026 · Waimanga Room, Wellington City Council
 
 > How might we use public online information to identify where emergency impacts may be emerging, while making the reliability and limitations of that information clear?
 
-A prototype could collect relevant public posts, local news and community reports; identify likely locations and issue types; and show where several independent sources appear to describe the same event — presenting signals for an intelligence team to investigate, never social-media content as verified fact.
+A prototype could collect relevant public posts, local news and community reports; identify likely locations and issue types; and show where several independent sources appear to describe the same event. It would not present social-media content as verified fact. It would identify signals for an intelligence team to investigate.
+
+There may be an opportunity to develop this option in collaboration with doctoral research at Massey University's Joint Centre for Disaster Research, on multimodal generative AI for disaster situational awareness using social media. Early discussions with the WCC Emergency Management team have already identified possible overlap. Any collaboration would need to be agreed with the researcher and Massey University.
 
 **Desired outcome:** WCC can detect possible impacts earlier and direct staff attention to matters needing confirmation.
+
+*The common theme is improving the flow and use of information between communities and Council before and during an event.*
 
 ---
 
