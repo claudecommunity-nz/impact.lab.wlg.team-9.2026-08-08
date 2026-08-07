@@ -98,6 +98,29 @@ closed-off demo.
 Two teams work each problem statement independently. That's deliberate: two
 honest attempts at the same problem tell WCC more than one.
 
+## How reliability is graded — the Admiralty Code
+
+Wellington's EOC records confidence the way NZ CIMS practice does: the
+**Admiralty Code** — source reliability A–F × information credibility 1–6
+(A1 = completely reliable source, independently confirmed; F6 = unknown
+source, truth cannot be judged). The pipeline stamps an automated grade on
+every signal and group: official instruments such as GeoNet rate A,
+established media B–C, unknown social accounts F. Credibility improves with
+independent corroboration, to 2 at best — **grade 1 ("confirmed by other
+sources") is never assigned by software**. Confirmation is a human
+intelligence decision, and the interface says so.
+
+Two intake paths complement the live scrapers:
+
+- **Screenshot sharing** — a community member screenshots a post they can
+  already see and drops it in; a vision model extracts the content with
+  personal identifiers redacted. No platform is scraped.
+- **Verified official feeds** — `research/verifiable-sources.md` catalogues
+  the machine-readable public feeds we verified today (NZ Police Wellington
+  district news, MetService CAP, GeoNet, NZTA delays, Wellington Water live
+  faults, Mastodon) as corroboration sources, each with its access method,
+  cadence and licence.
+
 ## Data
 
 The public GIS datasets Wellington City Council Emergency Management shared are
