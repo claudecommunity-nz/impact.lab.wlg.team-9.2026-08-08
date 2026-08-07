@@ -19,6 +19,73 @@ There may be an opportunity to develop this option in collaboration with doctora
 
 ---
 
+## Running it
+
+```bash
+docker compose up --build -d      # or: make up
+open http://localhost:8080
+```
+
+Four scrapers start polling immediately and the map fills in within a minute.
+`make down` stops it, `make clean` also drops the database.
+
+| | |
+|---|---|
+| UI | http://localhost:8080 |
+| API docs | http://localhost:8000/docs |
+| What's in the store | http://localhost:8000/stats |
+| Signals as GeoJSON | http://localhost:8000/signals.geojson |
+| Groups as GeoJSON | http://localhost:8000/clusters.geojson |
+
+Deploying to Azure Container Instances: `./deploy/azure/deploy.sh` — see
+[deploy/azure/README.md](deploy/azure/README.md).
+
+## The pipeline
+
+```
+scrapers/  ──HTTP──▶  ingestion/  ──▶  MongoDB  ◀──  enrichment/
+  rss                  FastAPI                        classify    (keyword rules)
+  geonet               dedupes                        geolocate   (gazetteer)
+  mastodon             stamps "unverified"            corroborate (proximity grouping)
+  fixtures                  │
+                            └──────────▶  ui/  (MapLibre + nginx)
+```
+
+A folder per stage, a subfolder per scraper source and per enrichment job.
+Scrapers only ever speak HTTP to the ingestion API, so a new one can be written
+in any language and run anywhere — add `scrapers/sources/<name>/` with a
+`collect()` and a compose service with `SOURCES=<name>`. Enrichment jobs are
+modules in `enrichment/jobs/` listed in `ENRICHMENT_SCHEDULE`.
+
+**Sources.** `rss` (RNZ, MetService warnings, Wellington.Scoop, NZ Herald),
+`geonet` (real earthquake epicentres, no key needed), `mastodon` (public
+timelines, unauthenticated), and `fixtures` — synthetic Wellington scenarios
+replayed on startup so the demo survives dead venue wifi. Everything the
+fixture source emits is labelled as sample data all the way through to the map.
+
+**Enrichment runs on an interval, not under cron.** Same image, same behaviour
+on a laptop, under compose, and in an Azure container group — none of which
+agree on how to run crond in a container.
+
+## How reliability is handled
+
+The problem statement is as much about showing limitations as finding signals,
+so the answer is structural rather than a disclaimer bolted on at the end:
+
+- Every signal is stamped `verification.status: unverified` **at ingest**. There
+  is no code path that produces anything else.
+- Every inferred value carries the method that produced it and its evidence —
+  which keywords matched, which phrase produced the location, what kind of
+  place it was. The UI shows the evidence, not just the conclusion.
+- `source_count` counts **publishers, not posts**, and is labelled a reason to
+  check rather than a truth score. A syndicated story reprinted five times is
+  one source.
+- Colour on the map encodes corroboration only. Issue type is carried by its
+  label, because twelve categorical hues collapse under colour-vision
+  deficiency long before the twelfth.
+- Locations are suburb centroids and say so. A pin reads as a precise claim,
+  so each one carries the phrase it was inferred from.
+
 ## What we're building
 
 One working prototype, demoed in four minutes at 16:30.

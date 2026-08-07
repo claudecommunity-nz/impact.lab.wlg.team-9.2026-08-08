@@ -1,0 +1,23 @@
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # The UI talks to the API through its own origin, so there is no CORS
+    # story to get wrong and only one port to expose. API_UPSTREAM is
+    # api:8000 under compose and 127.0.0.1:8000 in an ACI container group,
+    # where everything shares a network namespace.
+    location /api/ {
+        proxy_pass http://${API_UPSTREAM}/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 60s;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
