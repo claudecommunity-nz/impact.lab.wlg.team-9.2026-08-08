@@ -1,0 +1,134 @@
+name: team9-signals
+
+# Shared Mongo connection settings, merged into each service that needs them.
+x-mongo: &mongo
+  MONGO_URI: mongodb://mongo:27017
+  MONGO_DB: ${MONGO_DB:-signals}
+
+# Shared scraper settings. Each scraper service overrides SOURCES.
+#
+# No shared `image:` tag here on purpose — every scraper service builds the same
+# context, and buildx refuses to write one tag from several concurrent builds.
+# The layer cache means the extra builds cost almost nothing.
+x-scraper: &scraper
+  build: ./scrapers
+  restart: unless-stopped
+  depends_on:
+    api:
+      condition: service_healthy
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  # ---- ingestion API -------------------------------------------------------
+  api:
+    build: ./ingestion
+    image: team9/ingestion:dev
+    restart: unless-stopped
+    environment:
+      <<: *mongo
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/healthz').read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # ---- scrapers: one service per source type -------------------------------
+  scraper-rss:
+    <<: *scraper
+    environment:
+      INGESTION_URL: http://api:8000
+      SOURCES: rss
+      SCRAPE_INTERVAL_SECONDS: ${RSS_INTERVAL:-600}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+  scraper-geonet:
+    <<: *scraper
+    environment:
+      INGESTION_URL: http://api:8000
+      SOURCES: geonet
+      SCRAPE_INTERVAL_SECONDS: ${GEONET_INTERVAL:-300}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+  scraper-mastodon:
+    <<: *scraper
+    environment:
+      INGESTION_URL: http://api:8000
+      SOURCES: mastodon
+      SCRAPE_INTERVAL_SECONDS: ${MASTODON_INTERVAL:-300}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+  # Replays a bundled fixture file. Runs once, then idles. Guarantees the demo
+  # has data even with no network.
+  scraper-fixtures:
+    <<: *scraper
+    restart: "no"
+    environment:
+      INGESTION_URL: http://api:8000
+      SOURCES: fixtures
+      RUN_ONCE: "true"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+  # ---- enrichment: scheduled jobs over the signal store --------------------
+  enrichment:
+    build: ./enrichment
+    image: team9/enrichment:dev
+    restart: unless-stopped
+    environment:
+      <<: *mongo
+      ENRICHMENT_SCHEDULE: ${ENRICHMENT_SCHEDULE:-classify:30,geolocate:30,corroborate:60}
+      CLUSTER_RADIUS_KM: ${CLUSTER_RADIUS_KM:-2.0}
+      CLUSTER_WINDOW_HOURS: ${CLUSTER_WINDOW_HOURS:-12}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  # ---- UI ------------------------------------------------------------------
+  ui:
+    build: ./ui
+    image: team9/ui:dev
+    restart: unless-stopped
+    environment:
+      API_UPSTREAM: api:8000
+    ports:
+      - "${UI_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # ---- optional: Mongo browser (docker compose --profile tools up) ---------
+  mongo-express:
+    image: mongo-express:1.0.2
+    profiles: ["tools"]
+    restart: unless-stopped
+    environment:
+      ME_CONFIG_MONGODB_URL: mongodb://mongo:27017
+      ME_CONFIG_BASICAUTH: "false"
+    ports:
+      - "${MONGO_EXPRESS_PORT:-8081}:8081"
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+volumes:
+  mongo-data:

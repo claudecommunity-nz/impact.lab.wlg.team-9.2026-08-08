@@ -1,0 +1,628 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Emerging impact signals — Wellington</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<style>
+/* ---------------------------------------------------------------------------
+   Colour is spent on one thing: how many independent sources describe a group.
+   That is the question this tool exists to answer, so it gets the ordinal blue
+   ramp (validated light and dark). Issue type is carried by its label, not by
+   hue — twelve categorical colours on a map would collapse under colour-vision
+   deficiency long before the twelfth.
+   --------------------------------------------------------------------------- */
+:root {
+  color-scheme: light;
+  --surface-1: #fcfcfb;
+  --surface-2: #f9f9f7;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --border: rgba(11, 11, 11, 0.10);
+  --gridline: #e1e0d9;
+
+  /* corroboration ramp — 1 / 2 / 3 / 4+ independent sources */
+  --corr-1: #86b6ef;
+  --corr-2: #3987e5;
+  --corr-3: #1c5cab;
+  --corr-4: #0d366b;
+
+  --meter-fill: #3987e5;
+  --status-warning: #fab219;
+  --status-critical: #d03b3b;
+  --status-good: #0ca30c;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --surface-2: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --border: rgba(255, 255, 255, 0.10);
+    --gridline: #2c2c2a;
+    --corr-1: #184f95;
+    --corr-2: #256abf;
+    --corr-3: #3987e5;
+    --corr-4: #86b6ef;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--surface-2);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.45;
+  display: flex;
+  flex-direction: column;
+}
+
+/* --- header ------------------------------------------------------------- */
+header {
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+  padding: 10px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  align-items: center;
+}
+h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+h1 span { font-weight: 400; color: var(--text-muted); }
+
+.warning-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--status-warning);
+  border-left: 4px solid var(--status-warning);
+  border-radius: 4px;
+  padding: 5px 10px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  flex: 1 1 420px;
+}
+.warning-strip svg { flex: none; }
+.warning-strip strong { color: var(--text-primary); }
+
+.stats { display: flex; gap: 16px; margin-left: auto; }
+.stat { text-align: right; }
+.stat .value { font-size: 17px; font-weight: 650; display: block; line-height: 1.1; }
+.stat .label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+
+/* --- filters ------------------------------------------------------------ */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+  font-size: 12.5px;
+}
+.filters label { color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
+.filters select, .filters input[type="number"] {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 3px 6px;
+  border: 1px solid var(--gridline);
+  border-radius: 4px;
+  background: var(--surface-1);
+  color: var(--text-primary);
+}
+#refresh-note { margin-left: auto; color: var(--text-muted); font-size: 12px; }
+
+/* --- layout ------------------------------------------------------------- */
+main { flex: 1; display: flex; min-height: 0; }
+#map { flex: 1; min-width: 0; }
+aside {
+  width: 400px;
+  flex: none;
+  border-left: 1px solid var(--border);
+  background: var(--surface-1);
+  overflow-y: auto;
+  padding: 12px;
+}
+@media (max-width: 900px) {
+  main { flex-direction: column; }
+  aside { width: auto; border-left: 0; border-top: 1px solid var(--border); max-height: 45vh; }
+  #map { min-height: 45vh; }
+}
+
+/* --- cluster cards ------------------------------------------------------ */
+.section-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-muted); margin: 0 0 8px; font-weight: 600;
+}
+.card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  background: var(--surface-1);
+}
+.card:hover { border-color: var(--meter-fill); }
+.card.selected { border-color: var(--meter-fill); box-shadow: 0 0 0 1px var(--meter-fill); }
+.card-head { display: flex; align-items: baseline; gap: 8px; }
+.card-title { font-weight: 600; flex: 1; }
+.card-sub { color: var(--text-secondary); font-size: 12.5px; margin-top: 2px; }
+
+.sources-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; font-weight: 600;
+  padding: 2px 7px; border-radius: 999px;
+  color: #fff; white-space: nowrap;
+}
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+
+.chip {
+  display: inline-block;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--gridline);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.chip.synthetic { border-color: var(--status-warning); color: var(--text-primary); }
+
+/* --- detail ------------------------------------------------------------- */
+#detail { display: none; }
+#detail.open { display: block; }
+.back {
+  background: none; border: 0; padding: 0; margin-bottom: 10px;
+  font: inherit; font-size: 12.5px; color: var(--meter-fill); cursor: pointer;
+}
+.member {
+  border-top: 1px solid var(--gridline);
+  padding: 10px 0;
+}
+.member-meta {
+  display: flex; flex-wrap: wrap; gap: 6px 10px;
+  font-size: 12px; color: var(--text-muted); margin-bottom: 4px;
+}
+.member-text { font-size: 13px; }
+.member a { color: var(--meter-fill); font-size: 12px; }
+
+/* Reliability is shown, never implied. Every inferred value carries the method
+   that produced it and a meter you can read at a glance. */
+.meter { margin-top: 6px; }
+.meter-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-secondary); }
+.meter-label { flex: none; width: 74px; }
+.meter-track { flex: 1; height: 5px; border-radius: 3px; background: var(--gridline); overflow: hidden; }
+.meter-bar { height: 100%; border-radius: 3px; background: var(--meter-fill); }
+.meter-value { flex: none; width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+.method-note { font-size: 11.5px; color: var(--text-muted); margin-top: 4px; font-style: italic; }
+
+/* --- legend ------------------------------------------------------------- */
+.legend {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 12px;
+  background: var(--surface-1);
+}
+.legend-row { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-top: 4px; color: var(--text-secondary); }
+.legend-note { font-size: 11.5px; color: var(--text-muted); margin-top: 8px; }
+
+.empty { color: var(--text-muted); font-size: 13px; padding: 20px 4px; }
+
+/* --- map popup ---------------------------------------------------------- */
+.maplibregl-popup-content {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 12.5px;
+  max-width: 280px;
+  color: #0b0b0b;
+}
+.maplibregl-popup-content strong { display: block; margin-bottom: 3px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Emerging impact signals <span>· Wellington</span></h1>
+
+  <!-- Status colour, icon and label together. Never colour alone, and never
+       out of sight: this is the claim the whole prototype rests on. -->
+  <div class="warning-strip" role="note">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M8 1.5 15 14H1L8 1.5Z" stroke="var(--status-warning)" stroke-width="1.5" stroke-linejoin="round"/>
+      <path d="M8 6v3.5" stroke="var(--status-warning)" stroke-width="1.5" stroke-linecap="round"/>
+      <circle cx="8" cy="11.6" r="0.9" fill="var(--status-warning)"/>
+    </svg>
+    <div>
+      <strong>Unverified.</strong>
+      Public posts and news, grouped automatically. Locations and issue types are
+      inferred, not reported. Nothing here is confirmed. In an emergency, call 111.
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><span class="value" id="stat-signals">–</span><span class="label">Signals</span></div>
+    <div class="stat"><span class="value" id="stat-clusters">–</span><span class="label">Groups</span></div>
+    <div class="stat"><span class="value" id="stat-multi">–</span><span class="label">2+ sources</span></div>
+  </div>
+</header>
+
+<div class="filters">
+  <label>Time
+    <select id="f-since">
+      <option value="6h">Last 6 hours</option>
+      <option value="24h" selected>Last 24 hours</option>
+      <option value="3d">Last 3 days</option>
+      <option value="7d">Last 7 days</option>
+    </select>
+  </label>
+  <label>Issue
+    <select id="f-issue"><option value="">All types</option></select>
+  </label>
+  <label>Min. independent sources
+    <select id="f-min">
+      <option value="1" selected>1 (everything)</option>
+      <option value="2">2 or more</option>
+      <option value="3">3 or more</option>
+    </select>
+  </label>
+  <label><input type="checkbox" id="f-signals" checked> Show individual signals</label>
+  <span id="refresh-note">—</span>
+</div>
+
+<main>
+  <div id="map"></div>
+  <aside>
+    <div id="list-view">
+      <div class="legend">
+        <div class="section-title" style="margin-bottom:6px">Independent sources</div>
+        <div class="legend-row"><span class="dot" style="background:var(--corr-1)"></span> 1 source — uncorroborated</div>
+        <div class="legend-row"><span class="dot" style="background:var(--corr-2)"></span> 2 sources</div>
+        <div class="legend-row"><span class="dot" style="background:var(--corr-3)"></span> 3 sources</div>
+        <div class="legend-row"><span class="dot" style="background:var(--corr-4)"></span> 4 or more sources</div>
+        <div class="legend-note">
+          Counted by publisher, not by post — the same story reprinted is one source.
+          More sources means more reason to check, not that it is true.
+        </div>
+      </div>
+      <div class="section-title">Groups to check, most corroborated first</div>
+      <div id="list"></div>
+    </div>
+
+    <div id="detail">
+      <button class="back" id="back">&larr; Back to all groups</button>
+      <div id="detail-body"></div>
+    </div>
+  </aside>
+</main>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script>
+const API = "/api";
+const EMPTY = { type: "FeatureCollection", features: [] };
+
+// Ordinal ramp read from CSS so light and dark stay in one place.
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const corrColor = (n) => css(n >= 4 ? "--corr-4" : n === 3 ? "--corr-3" : n === 2 ? "--corr-2" : "--corr-1");
+
+const state = { clusters: EMPTY, selected: null, pending: {} };
+
+// Sources and layers are declared in the style rather than added on the `load`
+// event. `load` waits on a completed first render, which does not always
+// arrive under software rendering — and a map that silently never populates is
+// a bad thing to discover four minutes before a demo.
+const STYLE = {
+  version: 8,
+  sources: {
+    osm: {
+      type: "raster",
+      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+      tileSize: 256,
+      attribution: "© OpenStreetMap contributors",
+    },
+    signals: { type: "geojson", data: EMPTY },
+    clusters: { type: "geojson", data: EMPTY },
+  },
+  layers: [
+    { id: "osm", type: "raster", source: "osm" },
+
+    // Individual signals sit underneath in neutral grey. They are context, not
+    // the finding — the groups are the finding. Opacity carries how confident
+    // the location inference was, so a vague "somewhere in Wellington" pin
+    // visibly fades against a named-street one.
+    {
+      id: "signals",
+      type: "circle",
+      source: "signals",
+      paint: {
+        "circle-radius": 3.5,
+        "circle-color": "#898781",
+        "circle-opacity": ["max", 0.2, ["get", "location_confidence"]],
+        "circle-stroke-width": 1,
+        "circle-stroke-color": "rgba(255,255,255,0.8)",
+      },
+    },
+
+    // Radius by how many signals; fill by how many independent sources.
+    {
+      id: "clusters",
+      type: "circle",
+      source: "clusters",
+      paint: {
+        "circle-radius": ["interpolate", ["linear"], ["get", "signal_count"], 1, 9, 8, 26],
+        "circle-color": [
+          "step", ["get", "source_count"],
+          css("--corr-1"), 2, css("--corr-2"), 3, css("--corr-3"), 4, css("--corr-4"),
+        ],
+        "circle-opacity": 0.82,
+        // 2px surface ring so overlapping groups stay countable.
+        "circle-stroke-width": 2,
+        "circle-stroke-color": "#ffffff",
+      },
+    },
+
+    // No symbol layer for the count: a text layer needs a glyph endpoint, and
+    // that is another network dependency that can fail on venue wifi. The
+    // count is on hover and in the list, and the ramp carries it at a glance.
+  ],
+};
+
+// The map is the nice-to-have; the list is the thing that has to work. If
+// WebGL is unavailable — a locked-down machine, a projector on software
+// rendering — everything still loads and the panel is fully usable.
+let map = null;
+try {
+  map = new maplibregl.Map({
+    container: "map",
+    center: [174.7756, -41.2866],
+    zoom: 11.2,
+    style: STYLE,
+  });
+  map.addControl(new maplibregl.NavigationControl(), "top-right");
+  map.addControl(new maplibregl.ScaleControl({ maxWidth: 100, unit: "metric" }));
+} catch (err) {
+  document.getElementById("map").innerHTML =
+    `<div class="empty" style="padding:24px">Map unavailable in this browser (${err.message}).
+     The list on the right has everything.</div>`;
+}
+
+/** Push data to a source whenever the style is ready, replaying the last value. */
+function setLayerData(id, data) {
+  if (!map) return;
+  state.pending[id] = data;
+  const source = map.getSource(id);
+  if (source) {
+    source.setData(data);
+  } else {
+    map.once("styledata", () => {
+      const late = map.getSource(id);
+      if (late) late.setData(state.pending[id]);
+    });
+  }
+}
+
+const label = (s) => (s || "unclassified").replace(/_/g, " ");
+
+function timeAgo(iso) {
+  if (!iso) return "unknown time";
+  const mins = Math.round((Date.now() - new Date(iso)) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs} hr ago`;
+  return `${Math.round(hrs / 24)} d ago`;
+}
+
+function meter(labelText, value, note) {
+  const pct = Math.round((value || 0) * 100);
+  return `<div class="meter"><div class="meter-row">
+      <span class="meter-label">${labelText}</span>
+      <span class="meter-track"><span class="meter-bar" style="width:${pct}%"></span></span>
+      <span class="meter-value">${pct}%</span>
+    </div>${note ? `<div class="method-note">${note}</div>` : ""}</div>`;
+}
+
+// --- map interaction -------------------------------------------------------
+
+if (map) {
+  const popup = new maplibregl.Popup({ closeButton: false, offset: 12 });
+
+  map.on("mouseenter", "clusters", (e) => {
+    map.getCanvas().style.cursor = "pointer";
+    const p = e.features[0].properties;
+    popup.setLngLat(e.features[0].geometry.coordinates)
+      .setHTML(
+        `<strong>${label(p.issue_type)}${p.place ? " · " + p.place : ""}</strong>
+         ${p.source_count} independent source${p.source_count === 1 ? "" : "s"},
+         ${p.signal_count} item${p.signal_count === 1 ? "" : "s"}<br>
+         <em>Unverified — click to read the sources</em>`)
+      .addTo(map);
+  });
+  map.on("mouseleave", "clusters", () => {
+    map.getCanvas().style.cursor = "";
+    popup.remove();
+  });
+  map.on("click", "clusters", (e) => openCluster(e.features[0].properties.cluster_id));
+}
+
+// --- data ------------------------------------------------------------------
+
+const q = () => ({
+  since: document.getElementById("f-since").value,
+  issue: document.getElementById("f-issue").value,
+  min: document.getElementById("f-min").value,
+});
+
+async function getJSON(path) {
+  const r = await fetch(API + path);
+  if (!r.ok) throw new Error(`${path} → ${r.status}`);
+  return r.json();
+}
+
+async function refresh() {
+  const { since, issue, min } = q();
+  const issueParam = issue ? `&issue_type=${encodeURIComponent(issue)}` : "";
+  try {
+    const [clusters, signals, stats] = await Promise.all([
+      getJSON(`/clusters.geojson?since=${since}&min_sources=${min}`),
+      getJSON(`/signals.geojson?since=${since}${issueParam}`),
+      getJSON(`/stats`),
+    ]);
+
+    state.clusters = issue
+      ? { ...clusters, features: clusters.features.filter((f) => f.properties.issue_type === issue) }
+      : clusters;
+
+    setLayerData("clusters", state.clusters);
+    setLayerData("signals", document.getElementById("f-signals").checked ? signals : EMPTY);
+
+    document.getElementById("stat-signals").textContent = stats.signals.total;
+    document.getElementById("stat-clusters").textContent = stats.clusters.total;
+    document.getElementById("stat-multi").textContent = stats.clusters.multi_source;
+    populateIssues(stats.signals.by_issue_type);
+    renderList();
+    document.getElementById("refresh-note").textContent =
+      `updated ${new Date().toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit" })} · refreshes every 30s`;
+  } catch (err) {
+    document.getElementById("refresh-note").textContent = `could not reach the API (${err.message})`;
+  }
+}
+
+function populateIssues(byType) {
+  const select = document.getElementById("f-issue");
+  const wanted = Object.keys(byType || {}).filter((t) => t && t !== "unclassified" && t !== "none").sort();
+  const have = [...select.options].slice(1).map((o) => o.value);
+  if (wanted.join() === have.join()) return;
+  const current = select.value;
+  select.length = 1;
+  for (const t of wanted) select.add(new Option(label(t), t));
+  select.value = current;
+}
+
+// --- list ------------------------------------------------------------------
+
+function renderList() {
+  const list = document.getElementById("list");
+  const features = [...state.clusters.features].sort(
+    (a, b) =>
+      b.properties.source_count - a.properties.source_count ||
+      new Date(b.properties.last_seen) - new Date(a.properties.last_seen)
+  );
+
+  if (!features.length) {
+    list.innerHTML = `<div class="empty">Nothing in this window yet. Scrapers poll on a timer —
+      if the stack has just started, give it a minute, or widen the time filter.</div>`;
+    return;
+  }
+
+  list.innerHTML = features.map((f) => {
+    const p = f.properties;
+    // Raw fetched GeoJSON keeps arrays as arrays; properties read back off a
+    // MapLibre feature come through as JSON strings. Both paths land here.
+    const sources = Array.isArray(p.sources) ? p.sources : JSON.parse(p.sources || "[]");
+    return `<div class="card" data-id="${p.cluster_id}">
+      <div class="card-head">
+        <span class="card-title">${label(p.issue_type)}${p.place ? ` · ${p.place}` : ""}</span>
+        <span class="sources-badge" style="background:${corrColor(p.source_count)}">
+          ${p.source_count} source${p.source_count === 1 ? "" : "s"}
+        </span>
+      </div>
+      <div class="card-sub">
+        ${p.signal_count} item${p.signal_count === 1 ? "" : "s"} · latest ${timeAgo(p.last_seen)}
+      </div>
+      <div class="card-sub" style="margin-top:6px">
+        ${sources.slice(0, 3).map((s) => `<span class="chip">${s}</span>`).join(" ")}
+        ${sources.length > 3 ? `<span class="chip">+${sources.length - 3} more</span>` : ""}
+        ${p.contains_synthetic === true || p.contains_synthetic === "true"
+          ? `<span class="chip synthetic">contains sample data</span>` : ""}
+      </div>
+    </div>`;
+  }).join("");
+
+  list.querySelectorAll(".card").forEach((el) =>
+    el.addEventListener("click", () => openCluster(el.dataset.id))
+  );
+}
+
+// --- detail ----------------------------------------------------------------
+
+async function openCluster(id) {
+  const data = await getJSON(`/clusters/${encodeURIComponent(id)}`);
+  const c = data.cluster;
+  state.selected = id;
+
+  if (map) map.flyTo({ center: c.geo.coordinates, zoom: 14, speed: 1.4 });
+
+  document.getElementById("detail-body").innerHTML = `
+    <div class="card-head" style="margin-bottom:4px">
+      <span class="card-title" style="font-size:16px">${label(c.issue_type)}</span>
+      <span class="sources-badge" style="background:${corrColor(c.source_count)}">
+        ${c.source_count} source${c.source_count === 1 ? "" : "s"}
+      </span>
+    </div>
+    <div class="card-sub">${c.place || "location uncertain"} ·
+      ${c.signal_count} item${c.signal_count === 1 ? "" : "s"} ·
+      first seen ${timeAgo(c.first_seen)}, latest ${timeAgo(c.last_seen)}</div>
+
+    <div class="warning-strip" style="margin:10px 0; flex:none">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M8 1.5 15 14H1L8 1.5Z" stroke="var(--status-warning)" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="M8 6v3.5" stroke="var(--status-warning)" stroke-width="1.5" stroke-linecap="round"/>
+        <circle cx="8" cy="11.6" r="0.9" fill="var(--status-warning)"/>
+      </svg>
+      <div>${c.note}</div>
+    </div>
+
+    ${meter("Location", c.location_confidence,
+      `Grouped within ${c.params.radius_km} km and ${c.params.window_hours} hours by ${c.method}.`)}
+
+    <div class="section-title" style="margin:16px 0 0">The ${c.signal_count} item${c.signal_count === 1 ? "" : "s"} behind this</div>
+    ${data.signals.map(renderMember).join("")}
+  `;
+
+  document.getElementById("list-view").style.display = "none";
+  document.getElementById("detail").classList.add("open");
+}
+
+function renderMember(s) {
+  const cls = (s.enrichment && s.enrichment.classify) || {};
+  const geo = (s.enrichment && s.enrichment.geolocate) || {};
+  const synthetic = s.raw && s.raw.synthetic;
+  return `<div class="member">
+    <div class="member-meta">
+      <span>${s.source.name}</span>
+      <span>${timeAgo(s.published_at || s.ingested_at)}</span>
+      <span class="chip">${label(cls.issue_type)}</span>
+      ${synthetic ? `<span class="chip synthetic">sample data</span>` : ""}
+    </div>
+    <div class="member-text">${(s.title ? `<strong>${s.title}</strong> ` : "")}${s.text}</div>
+    ${s.url ? `<a href="${s.url}" target="_blank" rel="noopener noreferrer">Open original &nearr;</a>` : ""}
+    ${meter("Issue type", cls.confidence,
+      cls.matched_terms && cls.matched_terms.length
+        ? `Matched ${cls.matched_terms.map((t) => `"${t}"`).join(", ")} · ${cls.method}`
+        : "No hazard keywords matched.")}
+    ${meter("Location", geo.confidence, geo.precision_note || "No place name found in the text.")}
+  </div>`;
+}
+
+document.getElementById("back").addEventListener("click", () => {
+  state.selected = null;
+  document.getElementById("detail").classList.remove("open");
+  document.getElementById("list-view").style.display = "block";
+});
+
+["f-since", "f-issue", "f-min", "f-signals"].forEach((id) =>
+  document.getElementById(id).addEventListener("change", refresh)
+);
+
+// Data loading does not wait on the map.
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>
