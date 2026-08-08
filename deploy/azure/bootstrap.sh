@@ -294,8 +294,35 @@ EOF
   note "federated credential '$name' created"
 }
 
+# GitHub can present either of two subject forms, and which one you get is an
+# organisation setting rather than anything visible from here:
+#
+#   repo:owner/repo:ref:refs/heads/main
+#   repo:owner@<owner-id>/repo@<repo-id>:ref:refs/heads/main
+#
+# The second is the immutable form, which pins the identity to numeric IDs so a
+# rename cannot be used to impersonate a repo. A credential for the wrong form
+# fails with AADSTS700213 and a subject you have to read very carefully to spot
+# the difference. Registering both costs nothing and covers the setting being
+# on, off, or changed later.
 add_federated_credential "github-main" "repo:${REPO_SLUG}:ref:refs/heads/main"
 add_federated_credential "github-env-production" "repo:${REPO_SLUG}:environment:production"
+
+OWNER_ID=""; REPO_ID=""
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+  OWNER_ID="$(gh api "/repos/$REPO_SLUG" --jq '.owner.id' 2>/dev/null || true)"
+  REPO_ID="$(gh api "/repos/$REPO_SLUG" --jq '.id' 2>/dev/null || true)"
+fi
+
+if [[ -n "$OWNER_ID" && -n "$REPO_ID" ]]; then
+  SLUG_WITH_IDS="${REPO_SLUG%%/*}@${OWNER_ID}/${REPO_SLUG#*/}@${REPO_ID}"
+  add_federated_credential "github-main-ids" "repo:${SLUG_WITH_IDS}:ref:refs/heads/main"
+  add_federated_credential "github-env-production-ids" "repo:${SLUG_WITH_IDS}:environment:production"
+else
+  warn "could not read the numeric repo/owner IDs from GitHub"
+  warn "if the deploy fails with AADSTS700213, add a federated credential whose"
+  warn "subject matches the one printed in the workflow log, exactly"
+fi
 
 say "Role assignment (Contributor, scoped to $RESOURCE_GROUP only)"
 if az role assignment list \

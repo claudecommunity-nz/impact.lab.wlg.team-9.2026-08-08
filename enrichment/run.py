@@ -53,6 +53,19 @@ def parse_schedule() -> dict[str, int]:
     if not schedule:
         log.error("nothing scheduled; check ENRICHMENT_SCHEDULE=%r", raw)
         sys.exit(1)
+
+    # The schedule is set in three places — compose, the ACI template, and the
+    # default above. Adding a job and updating only some of them means it runs
+    # locally and quietly does not run in production. Nothing fails; the
+    # enrichment simply never appears. Say so at startup instead.
+    unscheduled = [name for name in known if name not in schedule]
+    if unscheduled:
+        log.warning(
+            "job(s) %s exist but are not in ENRICHMENT_SCHEDULE — they will not run. "
+            "Add them, or delete them if they are dead.",
+            ", ".join(unscheduled),
+        )
+
     return schedule
 
 

@@ -88,8 +88,12 @@ properties:
             secureValue: __MONGO_URI__
           - name: MONGO_DB
             value: signals
+          # Keep in step with the default in docker-compose.yml. A job that
+          # exists but is missing here runs locally and silently does not run
+          # in Azure — enrichment/run.py logs a warning naming any job in the
+          # registry that this line forgot.
           - name: ENRICHMENT_SCHEDULE
-            value: classify:30,geolocate:30,corroborate:60
+            value: classify:30,geolocate:30,corroborate:60,admiralty:60
           - name: CLUSTER_RADIUS_KM
             value: "2.0"
           - name: CLUSTER_WINDOW_HOURS
