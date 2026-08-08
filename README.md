@@ -105,28 +105,72 @@ Deploying by hand from a checkout still works, given an Azure login:
 
 ```
 scrapers/  ──HTTP──▶  ingestion/  ──▶  MongoDB  ◀──  enrichment/
-  rss                  FastAPI                        classify    (keyword rules)
-  geonet               dedupes                        geolocate   (gazetteer)
-  mastodon             stamps "unverified"            corroborate (proximity grouping)
-  fixtures                  │
-                            └──────────▶  ui/  (MapLibre + nginx)
+  rss                  FastAPI                        classify     (keyword rules)
+  geonet               dedupes                        geolocate    (gazetteer)
+  mastodon             stamps "unverified"            corroborate  (proximity grouping)
+  reddit                    │                         admiralty    (A–F × 1–6 grading)
+  nzta                      │                         prioritise   (what to look at first)
+  welectricity              │
+  screenshots               └──────────▶  ui/  (MapLibre + nginx)
+  fixtures
 ```
 
 A folder per stage, a subfolder per scraper source and per enrichment job.
-Scrapers only ever speak HTTP to the ingestion API, so a new one can be written
-in any language and run anywhere — add `scrapers/sources/<name>/` with a
-`collect()` and a compose service with `SOURCES=<name>`. Enrichment jobs are
-modules in `enrichment/jobs/` listed in `ENRICHMENT_SCHEDULE`.
+Scrapers only ever speak HTTP to the ingestion API and never touch the
+database, so a new one can be written in any language and run anywhere.
+Enrichment jobs are modules in `enrichment/jobs/` listed in
+`ENRICHMENT_SCHEDULE`.
 
-**Sources.** `rss` (RNZ, MetService warnings, Wellington.Scoop, NZ Herald),
-`geonet` (real earthquake epicentres, no key needed), `mastodon` (public
-timelines, unauthenticated), and `fixtures` — synthetic Wellington scenarios
-replayed on startup so the demo survives dead venue wifi. Everything the
-fixture source emits is labelled as sample data all the way through to the map.
+**Sources.** `rss` (RNZ, MetService warnings, Wellington.Scoop, NZ Herald, NZ
+Police), `geonet` (real earthquake epicentres, no key needed), `mastodon`
+(public timelines, unauthenticated), `nzta` and `welectricity` (official
+operator feeds), `reddit` (a synthetic corpus replayed on a shifted clock),
+`screenshots` (human-submitted captures from platforms with no usable public
+API), and `fixtures` — synthetic Wellington scenarios replayed on startup so
+the demo survives dead venue wifi. Everything synthetic is labelled as sample
+data all the way through to the map.
 
 **Enrichment runs on an interval, not under cron.** Same image, same behaviour
 on a laptop, under compose, and in an Azure container group — none of which
 agree on how to run crond in a container.
+
+## Adding a source
+
+There is a Claude Code skill for this: **`.claude/skills/new-scraper/`**. Open
+this repo in Claude Code and ask for a new collector — "add a scraper for the
+Greater Wellington flood warnings RSS feed" — and it will follow it.
+
+It carries two working templates, RSS/Atom and JSON API, plus the parts that
+are not obvious from reading the existing collectors:
+
+- **Only `source` and `text` are required.** A signal with no location is still
+  useful — it appears under *Unmapped only* in the raw data view and in the
+  review queue. Do not invent fields to fill the schema.
+- **Never set `verification.status`.** The API stamps every signal `unverified`
+  at ingest and nothing else may write it. Confirmation is a human action
+  through the review queue, and it is the only route to credibility grade 1.
+- **`external_id` is what makes re-scraping idempotent.** Use the source's own
+  identity. Without a stable one, every poll creates duplicates and inflates
+  the corroboration count — the one number this system asks people to trust.
+- **Relevance filtering is region AND hazard by default.** A feed that is
+  already Wellington-only sets `local=True`, or everything it publishes is
+  discarded for not naming a suburb.
+- **Mark synthetic data synthetic.** `raw.synthetic = True`, and say so in
+  `source.name`.
+
+It also covers the judgement calls before any code: whether the source is
+public and stable, how gently to poll it, what personal information not to
+store, and what to do about platforms with no viable public API. For those —
+Facebook, Instagram, TikTok, X — the answer is *not* to scrape a logged-in
+feed. `sources/screenshots` is the pattern: a person submits a capture through
+`submit.html` and it is graded accordingly.
+
+Doing it by hand is four steps: the collector in `scrapers/sources/<name>/`, a
+compose service with `SOURCES=<name>`, the same name added to `SOURCES` in
+`deploy/azure/aci.template.yaml`, and a test in `scrapers/tests/`. Forgetting
+the third is the classic mistake — it runs locally and silently never runs in
+Azure. Then check `localhost:8080/#pipeline`, which shows what it polled and
+how much survived the filter.
 
 ## How reliability is handled
 

@@ -4,6 +4,10 @@ __pycache__/
 .venv/
 venv/
 .DS_Store
+demo/out/screen.webm
+demo/out/audio/
+demo/out/voiceover.wav
+demo/out/walkthrough-silent.mp4
 deploy/azure/aci.generated.yaml
 deploy/azure/.azure-env
 deploy/azure/.mongo-uri
