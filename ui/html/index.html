@@ -298,6 +298,7 @@ aside {
 }
 .chip.synthetic { border-color: var(--status-warning); color: var(--text-primary); }
 .chip.grade { font-weight: 650; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.chip.verified { border-color: var(--status-good); color: var(--status-good); font-weight: 650; }
 
 /* --- detail ------------------------------------------------------------- */
 #detail { display: none; }
@@ -340,6 +341,24 @@ aside {
 
 .empty { color: var(--text-muted); font-size: 13px; padding: 20px 4px; }
 
+/* --- cluster markers ------------------------------------------------------
+   Plain DOM elements, not a GL symbol layer, so the report count can be a
+   real number without needing a glyph server — see the note by STYLE below. */
+.cluster-marker {
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-weight: 700;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  border: 2px solid #fff;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.cluster-marker.verified { border: 3px solid var(--status-good); }
+
 /* --- map popup ---------------------------------------------------------- */
 .maplibregl-popup-content {
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -358,6 +377,7 @@ aside {
     <a href="/" class="active">Map</a>
     <a href="/review.html">Verify signals</a>
     <a href="/verified.html">Verified</a>
+    <a href="/submit.html">Submit a report</a>
   </nav>
 
   <!-- Status colour, icon and label together. Never colour alone, and never
@@ -408,6 +428,7 @@ aside {
     </select>
   </label>
   <label><input type="checkbox" id="f-signals" checked> Show individual signals</label>
+  <label><input type="checkbox" id="f-verified-only"> Verified only</label>
   <span id="refresh-note">—</span>
 </div>
 
@@ -489,6 +510,15 @@ aside {
         </div>
       </div>
       <div class="legend">
+        <div class="section-title" style="margin-bottom:6px">Verification</div>
+        <div class="legend-row"><span class="dot" style="background:var(--status-good)"></span> Verified signal — a reviewer judged this specific report plausible</div>
+        <div class="legend-row"><span class="dot" style="background:transparent; border:2px solid var(--status-good)"></span> Group contains at least one verified report</div>
+        <div class="legend-note">
+          Verifying records a human judgement call, not confirmation the event happened.
+          Review items on the <a href="/review.html">Verify signals</a> page.
+        </div>
+      </div>
+      <div class="legend">
         <div class="section-title" style="margin-bottom:6px">Admiralty grading</div>
         <div class="legend-row"><span class="chip grade">A–F</span> source reliability (A completely reliable … F cannot be judged)</div>
         <div class="legend-row"><span class="chip grade">1–6</span> information credibility (1 confirmed … 6 cannot be judged)</div>
@@ -518,7 +548,7 @@ const EMPTY = { type: "FeatureCollection", features: [] };
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const corrColor = (n) => css(n >= 4 ? "--corr-4" : n === 3 ? "--corr-3" : n === 2 ? "--corr-2" : "--corr-1");
 
-const state = { clusters: EMPTY, selected: null, pending: {} };
+const state = { clusters: EMPTY, selected: null, pending: {}, clusterMarkers: [] };
 
 // Sources and layers are declared in the style rather than added on the `load`
 // event. `load` waits on a completed first render, which does not always
@@ -534,49 +564,38 @@ const STYLE = {
       attribution: "© OpenStreetMap contributors",
     },
     signals: { type: "geojson", data: EMPTY },
-    clusters: { type: "geojson", data: EMPTY },
   },
   layers: [
     { id: "osm", type: "raster", source: "osm" },
 
-    // Individual signals sit underneath in neutral grey. They are context, not
-    // the finding — the groups are the finding. Opacity carries how confident
-    // the location inference was, so a vague "somewhere in Wellington" pin
-    // visibly fades against a named-street one.
+    // Individual signals sit underneath in neutral grey — context, not the
+    // finding. A signal a reviewer has verified switches to the same green
+    // used everywhere else in the app for a reviewer's judgement call, so
+    // "verified" reads the same colour on the map as it does in the list.
+    // Opacity still carries how confident the location inference was, so a
+    // vague "somewhere in Wellington" pin visibly fades against a named-street
+    // one, verified or not.
     {
       id: "signals",
       type: "circle",
       source: "signals",
       paint: {
         "circle-radius": 3.5,
-        "circle-color": "#898781",
+        "circle-color": [
+          "case",
+          ["==", ["get", "verification_status"], "verified"], css("--status-good"),
+          "#898781",
+        ],
         "circle-opacity": ["max", 0.2, ["get", "location_confidence"]],
         "circle-stroke-width": 1,
         "circle-stroke-color": "rgba(255,255,255,0.8)",
       },
     },
 
-    // Radius by how many signals; fill by how many independent sources.
-    {
-      id: "clusters",
-      type: "circle",
-      source: "clusters",
-      paint: {
-        "circle-radius": ["interpolate", ["linear"], ["get", "signal_count"], 1, 9, 8, 26],
-        "circle-color": [
-          "step", ["get", "source_count"],
-          css("--corr-1"), 2, css("--corr-2"), 3, css("--corr-3"), 4, css("--corr-4"),
-        ],
-        "circle-opacity": 0.82,
-        // 2px surface ring so overlapping groups stay countable.
-        "circle-stroke-width": 2,
-        "circle-stroke-color": "#ffffff",
-      },
-    },
-
-    // No symbol layer for the count: a text layer needs a glyph endpoint, and
-    // that is another network dependency that can fail on venue wifi. The
-    // count is on hover and in the list, and the ramp carries it at a glance.
+    // Clusters are NOT a GL layer — see renderClusterMarkers() below. A GL
+    // symbol layer needs a glyph server to draw the count as text, and that
+    // is another network dependency that can fail on venue wifi. Plain DOM
+    // markers render their own text with zero extra requests.
   ],
 };
 
@@ -616,6 +635,12 @@ function setLayerData(id, data) {
 
 const label = (s) => (s || "unclassified").replace(/_/g, " ");
 
+// Every signal here can now originate from a public submission form, not
+// just scraped feeds — title/text/place are free text someone typed, so they
+// go through this before ever landing in innerHTML or a map popup.
+const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ESC[c]);
+
 function timeAgo(iso) {
   if (!iso) return "unknown time";
   const mins = Math.round((Date.now() - new Date(iso)) / 60000);
@@ -635,28 +660,64 @@ function meter(labelText, value, note) {
     </div>${note ? `<div class="method-note">${note}</div>` : ""}</div>`;
 }
 
-// --- map interaction -------------------------------------------------------
+// --- cluster markers --------------------------------------------------------
+// DOM markers, not a GL layer (see STYLE above) — this is the only way to put
+// a real report count on the dot without a glyph-server dependency.
 
-if (map) {
+// Radius by report count, same curve the old GL layer used (9px at 1 report,
+// 26px at 8 or more), so the map reads the same as it always has.
+const clusterRadius = (n) => Math.min(26, 9 + (Math.max(1, n) - 1) * ((26 - 9) / 7));
+
+function clearClusterMarkers() {
+  state.clusterMarkers.forEach((m) => m.remove());
+  state.clusterMarkers = [];
+}
+
+function renderClusterMarkers(features) {
+  clearClusterMarkers();
+  if (!map) return;
   const popup = new maplibregl.Popup({ closeButton: false, offset: 12 });
 
-  map.on("mouseenter", "clusters", (e) => {
-    map.getCanvas().style.cursor = "pointer";
-    const p = e.features[0].properties;
-    popup.setLngLat(e.features[0].geometry.coordinates)
-      .setHTML(
-        `<strong>${label(p.issue_type)}${p.place ? " · " + p.place : ""}</strong>
-         ${p.source_count} independent source${p.source_count === 1 ? "" : "s"},
-         ${p.signal_count} item${p.signal_count === 1 ? "" : "s"}<br>
-         ${p.admiralty_grade ? `Graded ${p.admiralty_grade} — ${p.admiralty_meaning}<br>` : ""}
-         <em>Unverified — click to read the sources</em>`)
-      .addTo(map);
-  });
-  map.on("mouseleave", "clusters", () => {
-    map.getCanvas().style.cursor = "";
-    popup.remove();
-  });
-  map.on("click", "clusters", (e) => openCluster(e.features[0].properties.cluster_id));
+  for (const f of features) {
+    const p = f.properties;
+    const verified = (p.verified_count || 0) > 0;
+    const size = Math.round(clusterRadius(p.signal_count) * 2);
+
+    const el = document.createElement("div");
+    el.className = "cluster-marker" + (verified ? " verified" : "");
+    el.style.width = `${size}px`;
+    el.style.height = `${size}px`;
+    el.style.background = corrColor(p.source_count);
+    // corr-1 is a pale blue; white text loses too much contrast on it.
+    el.style.color = p.source_count === 1 ? "#0b0b0c" : "#fff";
+    el.textContent = p.signal_count;
+    el.setAttribute("role", "button");
+    el.setAttribute(
+      "aria-label",
+      `${label(p.issue_type)}${p.place ? " · " + p.place : ""}, ${p.signal_count} reports, ` +
+      `${p.source_count} source${p.source_count === 1 ? "" : "s"}` +
+      `${verified ? `, ${p.verified_count} verified` : ""}`
+    );
+
+    el.addEventListener("mouseenter", () => {
+      popup.setLngLat(f.geometry.coordinates)
+        .setHTML(
+          `<strong>${label(p.issue_type)}${p.place ? " · " + esc(p.place) : ""}</strong>
+           ${p.source_count} independent source${p.source_count === 1 ? "" : "s"},
+           ${p.signal_count} item${p.signal_count === 1 ? "" : "s"}<br>
+           ${p.admiralty_grade ? `Graded ${p.admiralty_grade} — ${p.admiralty_meaning}<br>` : ""}
+           ${verified
+             ? `<em>${p.verified_count} of ${p.signal_count} report${p.signal_count === 1 ? "" : "s"} reviewer-verified</em>`
+             : `<em>Unverified — click to read the sources</em>`}`)
+        .addTo(map);
+    });
+    el.addEventListener("mouseleave", () => popup.remove());
+    el.addEventListener("click", () => openCluster(p.cluster_id));
+
+    state.clusterMarkers.push(
+      new maplibregl.Marker({ element: el }).setLngLat(f.geometry.coordinates).addTo(map)
+    );
+  }
 }
 
 // --- data ------------------------------------------------------------------
@@ -665,6 +726,7 @@ const q = () => ({
   since: document.getElementById("f-since").value,
   issue: document.getElementById("f-issue").value,
   min: document.getElementById("f-min").value,
+  verifiedOnly: document.getElementById("f-verified-only").checked,
 });
 
 async function getJSON(path) {
@@ -674,20 +736,29 @@ async function getJSON(path) {
 }
 
 async function refresh() {
-  const { since, issue, min } = q();
+  const { since, issue, min, verifiedOnly } = q();
   const issueParam = issue ? `&issue_type=${encodeURIComponent(issue)}` : "";
   try {
-    const [clusters, signals, stats] = await Promise.all([
+    const [clustersData, signalsData, stats] = await Promise.all([
       getJSON(`/clusters.geojson?since=${since}&min_sources=${min}`),
       getJSON(`/signals.geojson?since=${since}${issueParam}`),
       getJSON(`/stats`),
     ]);
 
-    state.clusters = issue
-      ? { ...clusters, features: clusters.features.filter((f) => f.properties.issue_type === issue) }
-      : clusters;
+    let clusters = issue
+      ? { ...clustersData, features: clustersData.features.filter((f) => f.properties.issue_type === issue) }
+      : clustersData;
+    if (verifiedOnly) {
+      clusters = { ...clusters, features: clusters.features.filter((f) => f.properties.verified_count > 0) };
+    }
+    state.clusters = clusters;
 
-    setLayerData("clusters", state.clusters);
+    let signals = signalsData;
+    if (verifiedOnly) {
+      signals = { ...signals, features: signals.features.filter((f) => f.properties.verification_status === "verified") };
+    }
+
+    renderClusterMarkers(state.clusters.features);
     setLayerData("signals", document.getElementById("f-signals").checked ? signals : EMPTY);
 
     document.getElementById("stat-signals").textContent = stats.signals.total;
@@ -736,7 +807,7 @@ function renderList() {
     const sources = Array.isArray(p.sources) ? p.sources : JSON.parse(p.sources || "[]");
     return `<div class="card" data-id="${p.cluster_id}">
       <div class="card-head">
-        <span class="card-title">${label(p.issue_type)}${p.place ? ` · ${p.place}` : ""}</span>
+        <span class="card-title">${label(p.issue_type)}${p.place ? ` · ${esc(p.place)}` : ""}</span>
         <span class="sources-badge" style="background:${corrColor(p.source_count)}">
           ${p.source_count} source${p.source_count === 1 ? "" : "s"}
         </span>
@@ -745,6 +816,7 @@ function renderList() {
         ${p.signal_count} item${p.signal_count === 1 ? "" : "s"} · latest ${timeAgo(p.last_seen)}
       </div>
       <div class="card-sub" style="margin-top:6px">
+        ${p.verified_count > 0 ? `<span class="chip verified" title="${p.verified_count} of ${p.signal_count} reports reviewer-verified">&check; Verified</span>` : ""}
         ${p.admiralty_grade ? `<span class="chip grade" title="${p.admiralty_meaning || ""}">${p.admiralty_grade}</span>` : ""}
         ${sources.slice(0, 3).map((s) => `<span class="chip">${s}</span>`).join(" ")}
         ${sources.length > 3 ? `<span class="chip">+${sources.length - 3} more</span>` : ""}
@@ -765,6 +837,7 @@ async function openCluster(id) {
   const data = await getJSON(`/clusters/${encodeURIComponent(id)}`);
   const c = data.cluster;
   const adm = c.admiralty || {};
+  const verifiedCount = data.signals.filter((s) => s.verification && s.verification.status === "verified").length;
   state.selected = id;
 
   if (map) map.flyTo({ center: c.geo.coordinates, zoom: 14, speed: 1.4 });
@@ -776,8 +849,9 @@ async function openCluster(id) {
         ${c.source_count} source${c.source_count === 1 ? "" : "s"}
       </span>
       ${adm.grade ? `<span class="chip grade" title="${adm.meaning || ""}">${adm.grade}</span>` : ""}
+      ${verifiedCount > 0 ? `<span class="chip verified">&check; ${verifiedCount} of ${c.signal_count} verified</span>` : ""}
     </div>
-    <div class="card-sub">${c.place || "location uncertain"} ·
+    <div class="card-sub">${esc(c.place) || "location uncertain"} ·
       ${c.signal_count} item${c.signal_count === 1 ? "" : "s"} ·
       first seen ${timeAgo(c.first_seen)}, latest ${timeAgo(c.last_seen)}</div>
     ${adm.grade ? `<div class="card-sub">Admiralty grade ${adm.grade} · ${adm.meaning}</div>` : ""}
@@ -806,6 +880,7 @@ function renderMember(s) {
   const cls = (s.enrichment && s.enrichment.classify) || {};
   const geo = (s.enrichment && s.enrichment.geolocate) || {};
   const adm = (s.enrichment && s.enrichment.admiralty) || {};
+  const ver = s.verification || {};
   const synthetic = s.raw && s.raw.synthetic;
   return `<div class="member">
     <div class="member-meta">
@@ -813,9 +888,12 @@ function renderMember(s) {
       <span>${timeAgo(s.published_at || s.ingested_at)}</span>
       <span class="chip">${label(cls.issue_type)}</span>
       ${adm.grade ? `<span class="chip grade" title="${adm.meaning || ""}">${adm.grade}</span>` : ""}
+      ${ver.status === "verified"
+        ? `<span class="chip verified" title="${esc(ver.note)}">&check; Verified${ver.verified_by ? " · " + esc(ver.verified_by) : ""}</span>`
+        : ""}
       ${synthetic ? `<span class="chip synthetic">sample data</span>` : ""}
     </div>
-    <div class="member-text">${(s.title ? `<strong>${s.title}</strong> ` : "")}${s.text}</div>
+    <div class="member-text">${(s.title ? `<strong>${esc(s.title)}</strong> ` : "")}${esc(s.text)}</div>
     ${s.url ? `<a href="${s.url}" target="_blank" rel="noopener noreferrer">Open original &nearr;</a>` : ""}
     ${meter("Issue type", cls.confidence,
       cls.matched_terms && cls.matched_terms.length
@@ -831,7 +909,7 @@ document.getElementById("back").addEventListener("click", () => {
   document.getElementById("list-view").style.display = "block";
 });
 
-["f-since", "f-issue", "f-min", "f-signals"].forEach((id) =>
+["f-since", "f-issue", "f-min", "f-signals", "f-verified-only"].forEach((id) =>
   document.getElementById(id).addEventListener("change", refresh)
 );
 
@@ -1018,9 +1096,9 @@ async function renderData() {
           synthetic ? ` <span class="chip synthetic">sample</span>` : ""
         }</td>
         <td>${label(cls.issue_type)}</td>
-        <td>${geo.place || `<span style="color:var(--text-muted)">not placed</span>`}</td>
-        <td class="col-text">${(s.title ? `<strong>${s.title}</strong> — ` : "")}${
-          (s.text || "").slice(0, 220)
+        <td>${esc(geo.place) || `<span style="color:var(--text-muted)">not placed</span>`}</td>
+        <td class="col-text">${(s.title ? `<strong>${esc(s.title)}</strong> — ` : "")}${
+          esc((s.text || "").slice(0, 220))
         }${(s.text || "").length > 220 ? "…" : ""}</td>
         <td>${adm.grade ? `<span class="chip grade">${adm.grade}</span>` : "—"}</td>
         <td style="white-space:nowrap">

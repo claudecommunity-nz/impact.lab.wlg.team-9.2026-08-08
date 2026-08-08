@@ -163,6 +163,7 @@ main { padding: 16px; max-width: 1100px; margin: 0 auto; }
     <a href="/">Map</a>
     <a href="/review.html">Verify signals</a>
     <a href="/verified.html" class="active">Verified</a>
+    <a href="/submit.html">Submit a report</a>
   </nav>
 
   <div class="warning-strip" role="note">
@@ -203,6 +204,12 @@ main { padding: 16px; max-width: 1100px; margin: 0 auto; }
 const API = "/api";
 const label = (s) => (s || "unclassified").replace(/_/g, " ");
 
+// Every signal here can now originate from a public submission form, not
+// just scraped feeds — title/text/place are free text someone typed, so they
+// go through this before ever landing in innerHTML.
+const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ESC[c]);
+
 function timeAgo(iso) {
   if (!iso) return "unknown time";
   const mins = Math.round((Date.now() - new Date(iso)) / 60000);
@@ -220,7 +227,7 @@ async function getJSON(path) {
 }
 
 function confirmedBadge(v) {
-  return `<span class="confirmed-badge">Confirmed by reviewer${v.verified_by ? " · " + v.verified_by : ""}</span>`;
+  return `<span class="confirmed-badge">Confirmed by reviewer${v.verified_by ? " · " + esc(v.verified_by) : ""}</span>`;
 }
 
 function mediaBlock(media) {
@@ -242,12 +249,12 @@ function renderCard(s) {
     <div class="card-body">
       ${confirmedBadge(v)}
       <div class="card-meta">
-        <span>${s.source.name}</span>
+        <span>${esc(s.source.name)}</span>
         <span>confirmed ${timeAgo(v.verified_at)}</span>
         <span class="chip">${label(cls.issue_type)}</span>
-        <span class="chip">${geo.place || "location uncertain"}</span>
+        <span class="chip">${esc(geo.place) || "location uncertain"}</span>
       </div>
-      <div class="card-text">${s.title ? `<strong>${s.title}</strong>` : ""}${text}</div>
+      <div class="card-text">${s.title ? `<strong>${esc(s.title)}</strong>` : ""}${esc(text)}</div>
       ${s.url ? `<a class="original" href="${s.url}" target="_blank" rel="noopener noreferrer">Open original &nearr;</a>` : ""}
     </div>
   </div>`;
