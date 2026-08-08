@@ -2,13 +2,13 @@ name: Deploy to Azure
 
 # Run deploy/azure/bootstrap.sh once before this will work — it creates the
 # infrastructure and the OIDC federation this workflow authenticates with.
+#
+# Auto-deploy-on-push is disabled post-hackathon (the event this was built for
+# has ended). To turn it back on, restore the `push:` trigger below. That
+# alone is not enough to actually stop deploys — see deploy/azure/README.md
+# for revoking the OIDC federation and role assignment on the Azure side.
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE"
   workflow_dispatch:
     inputs:
       rebuild_all:
