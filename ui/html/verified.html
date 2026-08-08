@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verified — Wellington emerging impacts</title>
+<style>
+:root {
+  color-scheme: light;
+  --surface-1: #fcfcfb;
+  --surface-2: #f9f9f7;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --border: rgba(11, 11, 11, 0.10);
+  --gridline: #e1e0d9;
+  --meter-fill: #3987e5;
+  --status-warning: #fab219;
+  --status-critical: #d03b3b;
+  --status-good: #0ca30c;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --surface-2: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --border: rgba(255, 255, 255, 0.10);
+    --gridline: #2c2c2a;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--surface-2);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+header {
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+  padding: 10px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  align-items: center;
+}
+h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+h1 span { font-weight: 400; color: var(--text-muted); }
+
+.page-nav { display: flex; gap: 4px; }
+.page-nav a {
+  font-size: 12.5px; padding: 4px 10px; border-radius: 999px;
+  color: var(--text-secondary); text-decoration: none; white-space: nowrap;
+}
+.page-nav a:hover { color: var(--text-primary); background: var(--surface-2); }
+.page-nav a.active { background: var(--meter-fill); color: #fff; }
+
+.warning-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--status-good);
+  border-left: 4px solid var(--status-good);
+  border-radius: 4px;
+  padding: 5px 10px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  flex: 1 1 420px;
+}
+.warning-strip svg { flex: none; }
+.warning-strip strong { color: var(--text-primary); }
+
+.stats { display: flex; gap: 16px; margin-left: auto; }
+.stat { text-align: right; }
+.stat .value { font-size: 17px; font-weight: 650; display: block; line-height: 1.1; }
+.stat .label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+  font-size: 12.5px;
+}
+.filters label { color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
+.filters select {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 3px 6px;
+  border: 1px solid var(--gridline);
+  border-radius: 4px;
+  background: var(--surface-1);
+  color: var(--text-primary);
+}
+#refresh-note { margin-left: auto; color: var(--text-muted); font-size: 12px; }
+
+main { padding: 16px; max-width: 1100px; margin: 0 auto; }
+.section-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-muted); margin: 0 0 10px; font-weight: 600;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+.card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-1);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.card-media { width: 100%; aspect-ratio: 16/10; background: var(--surface-2); display: block; }
+.card-media img, .card-media video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.card-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+
+.confirmed-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 600;
+  padding: 2px 8px; border-radius: 999px;
+  align-self: flex-start;
+  background: rgba(57, 135, 229, 0.14); color: var(--meter-fill);
+}
+
+.card-meta { display: flex; flex-wrap: wrap; gap: 5px 8px; font-size: 11.5px; color: var(--text-muted); align-items: center; }
+.chip {
+  display: inline-block;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--gridline);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.card-text { font-size: 13px; }
+.card-text strong { display: block; margin-bottom: 2px; }
+.card a.original { color: var(--meter-fill); font-size: 12px; text-decoration: none; }
+.card a.original:hover { text-decoration: underline; }
+.card-note { font-size: 11.5px; color: var(--text-muted); font-style: italic; margin-top: 2px; }
+
+.empty { color: var(--text-muted); font-size: 13px; padding: 30px 4px; text-align: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Verified <span>· Wellington</span></h1>
+  <nav class="page-nav">
+    <a href="/">Map</a>
+    <a href="/review.html">Verify signals</a>
+    <a href="/verified.html" class="active">Verified</a>
+  </nav>
+
+  <div class="warning-strip" role="note">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="8" cy="8" r="6.5" stroke="var(--status-good)" stroke-width="1.5"/>
+      <path d="M5.2 8.3 7.2 10.3 11 6.2" stroke="var(--status-good)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <div>
+      <strong>Reviewer-confirmed, not officially confirmed.</strong>
+      A human judged each of these plausible. That is a judgement call, not
+      confirmation that the event happened.
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><span class="value" id="stat-total">–</span><span class="label">Verified</span></div>
+  </div>
+</header>
+
+<div class="filters">
+  <label>Time
+    <select id="f-since">
+      <option value="6h">Last 6 hours</option>
+      <option value="24h">Last 24 hours</option>
+      <option value="3d">Last 3 days</option>
+      <option value="7d" selected>Last 7 days</option>
+    </select>
+  </label>
+  <span id="refresh-note">—</span>
+</div>
+
+<main>
+  <div class="section-title">Verified items, most recently confirmed first</div>
+  <div id="grid" class="grid"></div>
+</main>
+
+<script>
+const API = "/api";
+const label = (s) => (s || "unclassified").replace(/_/g, " ");
+
+function timeAgo(iso) {
+  if (!iso) return "unknown time";
+  const mins = Math.round((Date.now() - new Date(iso)) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs} hr ago`;
+  return `${Math.round(hrs / 24)} d ago`;
+}
+
+async function getJSON(path) {
+  const r = await fetch(API + path);
+  if (!r.ok) throw new Error(`${path} → ${r.status}`);
+  return r.json();
+}
+
+function confirmedBadge(v) {
+  return `<span class="confirmed-badge">Confirmed by reviewer${v.verified_by ? " · " + v.verified_by : ""}</span>`;
+}
+
+function mediaBlock(media) {
+  if (!media || !media.length) return "";
+  const m = media[0];
+  const el = m.type === "video"
+    ? `<video src="${m.url}" muted playsinline controls preload="metadata"></video>`
+    : `<img src="${m.url}" alt="" loading="lazy">`;
+  return `<div class="card-media">${el}</div>`;
+}
+
+function renderCard(s) {
+  const cls = (s.enrichment && s.enrichment.classify) || {};
+  const geo = (s.enrichment && s.enrichment.geolocate) || {};
+  const v = s.verification || {};
+  const text = s.text.length > 220 ? s.text.slice(0, 220).trim() + "…" : s.text;
+  return `<div class="card">
+    ${mediaBlock(s.media)}
+    <div class="card-body">
+      ${confirmedBadge(v)}
+      <div class="card-meta">
+        <span>${s.source.name}</span>
+        <span>confirmed ${timeAgo(v.verified_at)}</span>
+        <span class="chip">${label(cls.issue_type)}</span>
+        <span class="chip">${geo.place || "location uncertain"}</span>
+      </div>
+      <div class="card-text">${s.title ? `<strong>${s.title}</strong>` : ""}${text}</div>
+      ${s.url ? `<a class="original" href="${s.url}" target="_blank" rel="noopener noreferrer">Open original &nearr;</a>` : ""}
+    </div>
+  </div>`;
+}
+
+async function refresh() {
+  const since = document.getElementById("f-since").value;
+  const grid = document.getElementById("grid");
+
+  try {
+    const data = await getJSON(`/verified?since=${since}&limit=200`);
+
+    grid.innerHTML = data.signals.length
+      ? data.signals.map(renderCard).join("")
+      : `<div class="empty">Nothing verified in this window yet.</div>`;
+    document.getElementById("stat-total").textContent = data.signals.length;
+    document.getElementById("refresh-note").textContent =
+      `updated ${new Date().toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit" })} · refreshes every 30s`;
+  } catch (err) {
+    document.getElementById("refresh-note").textContent = `could not reach the API (${err.message})`;
+  }
+}
+
+document.getElementById("f-since").addEventListener("change", refresh);
+
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>

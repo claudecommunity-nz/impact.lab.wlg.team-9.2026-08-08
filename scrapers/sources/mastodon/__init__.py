@@ -46,6 +46,20 @@ def _fetch(path: str, params: dict) -> list[dict]:
         return []
 
 
+def _media_items(status: dict) -> list[dict]:
+    """Mastodon attachment types: image, video, gifv, audio, unknown. Only the
+    first two render as a static picture or a playable clip — the rest are
+    dropped rather than shown as a broken thumbnail."""
+    kind_map = {"image": "image", "video": "video", "gifv": "video"}
+    items = []
+    for att in status.get("media_attachments") or []:
+        kind = kind_map.get(att.get("type"))
+        url = att.get("url") or att.get("preview_url")
+        if kind and url:
+            items.append({"type": kind, "url": url})
+    return items
+
+
 def _to_signal(status: dict, origin: str) -> dict | None:
     text = clean_text(status.get("content"))
     if not text:
@@ -77,6 +91,7 @@ def _to_signal(status: dict, origin: str) -> dict | None:
         "url": status.get("url"),
         "external_id": status.get("uri") or status.get("id"),
         "published_at": parse_time(status.get("created_at")),
+        "media": _media_items(status),
         "raw": {
             "origin": origin,
             "filter": reasons,

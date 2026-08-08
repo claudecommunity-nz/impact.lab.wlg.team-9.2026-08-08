@@ -35,6 +35,40 @@ USER_AGENT = os.getenv(
 )
 
 
+def _media_items(entry: dict) -> list[dict]:
+    """Best-effort extraction across whichever media extension a feed uses —
+    Media RSS `media_content`, podcast-style `enclosures`, or a thumbnail as a
+    last resort. Most NZ news/warning feeds carry none of these; the card just
+    falls back to text, which is fine."""
+    items: list[dict] = []
+    seen: set[str] = set()
+
+    def add(url: str | None, kind: str | None):
+        if not url or kind not in ("image", "video") or url in seen:
+            return
+        seen.add(url)
+        items.append({"type": kind, "url": url})
+
+    def kind_of(medium: str | None, mime: str | None) -> str | None:
+        if medium in ("image", "video"):
+            return medium
+        mime = mime or ""
+        if mime.startswith("image/"):
+            return "image"
+        if mime.startswith("video/"):
+            return "video"
+        return None
+
+    for m in entry.get("media_content") or []:
+        add(m.get("url"), kind_of(m.get("medium"), m.get("type")))
+    for enc in entry.get("enclosures") or []:
+        add(enc.get("href") or enc.get("url"), kind_of(None, enc.get("type")))
+    if not items:
+        for t in entry.get("media_thumbnail") or []:
+            add(t.get("url"), "image")
+    return items
+
+
 def _configured_feeds() -> list[tuple[str, str, bool]]:
     raw = os.getenv("RSS_FEEDS", "").strip()
     if not raw:
@@ -103,6 +137,7 @@ def collect() -> list[dict]:
                     "published_at": parse_time(
                         entry.get("published_parsed") or entry.get("updated_parsed")
                     ),
+                    "media": _media_items(entry),
                     "raw": {"filter": reasons},
                 }
             )
