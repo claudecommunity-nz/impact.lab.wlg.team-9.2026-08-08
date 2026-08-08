@@ -22,11 +22,11 @@ from pydantic import BaseModel
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from .db import ensure_indexes, get_db
-from .models import IngestResult, RunReport, SignalBatch, SignalIn
+from .models import CitizenReportIn, IngestResult, LocationHint, RunReport, SignalBatch, SignalIn, SourceRef
 
 # Sources anyone can post to with no editorial gate — the ones a human should
 # look at before the map treats them as anything more than "someone said so".
-REVIEW_SOURCE_TYPES = ["mastodon", "rss"]
+REVIEW_SOURCE_TYPES = ["mastodon", "rss", "citizen_report"]
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -103,9 +103,14 @@ def public_signal(doc: dict) -> dict:
     """A signal doc safe to hand to a client.
 
     Every media item is just a link to wherever the publisher already hosts
-    it — nothing is uploaded to or stored by this API.
+    it — nothing is uploaded to or stored by this API. A citizen report's
+    contact details, if it has any, are popped here and nowhere else reads
+    the field — this whole API is unauthenticated, so anything not stripped
+    in this one function is public. The review team looks contact details up
+    directly in Mongo if they need to follow up.
     """
     doc = clean(doc)
+    doc.pop("reporter_contact", None)
     doc["media"] = [{"type": m.get("type", "image"), "url": m["url"]} for m in doc.get("media") or []]
     return doc
 
@@ -169,7 +174,7 @@ def signal_feature(doc: dict) -> dict:
     }
 
 
-def cluster_feature(doc: dict) -> dict:
+def cluster_feature(doc: dict, verified_count: int = 0) -> dict:
     adm = doc.get("admiralty") or {}
     return {
         "type": "Feature",
@@ -189,12 +194,38 @@ def cluster_feature(doc: dict) -> dict:
             "last_seen": _iso(doc.get("last_seen")),
             "location_confidence": doc.get("location_confidence") or 0.0,
             "place": doc.get("place"),
-            "verification_status": "unverified",
+            # A cluster is "verified" once a human has judged at least one of
+            # its member reports plausible — not all of them, and this is not
+            # confirmation that the underlying event happened.
+            "verified_count": verified_count,
+            "verification_status": "verified" if verified_count > 0 else "unverified",
             # Carried into the map layer so replayed demo data is labelled
             # everywhere it appears, not just in the list.
             "contains_synthetic": bool(doc.get("contains_synthetic")),
             "note": doc.get("note"),
         },
+    }
+
+
+def _verified_counts_by_cluster(db, clusters: list[dict]) -> dict[str, int]:
+    """How many of each cluster's member signals a human has verified.
+
+    One query for the whole page of clusters rather than one per cluster —
+    the map can ask for a few hundred of these on every 30s refresh.
+    """
+    all_ids = {sid for c in clusters for sid in c.get("signal_ids", [])}
+    if not all_ids:
+        return {}
+    verified_ids = {
+        d["signal_id"]
+        for d in db.signals.find(
+            {"signal_id": {"$in": list(all_ids)}, "verification.status": "verified"},
+            {"signal_id": 1},
+        )
+    }
+    return {
+        c["cluster_id"]: sum(1 for sid in c.get("signal_ids", []) if sid in verified_ids)
+        for c in clusters
     }
 
 
@@ -282,6 +313,54 @@ def build_document(sig: SignalIn, now: datetime) -> dict:
             "at": now,
         }
     return doc
+
+
+REPORT_DISCLAIMER = (
+    "Thanks — this has been added to the review queue. It is not confirmed, and "
+    "it is not a substitute for calling 111 in an emergency."
+)
+
+
+@app.post("/reports")
+def submit_report(body: CitizenReportIn):
+    """A member of the public reporting something directly through the site.
+
+    Goes through the exact same unverified-until-reviewed flow as a scraped
+    Mastodon post or RSS item (see REVIEW_SOURCE_TYPES) — it never counts for
+    anything on the map until a human checks it on /review/queue. `source` is
+    stamped here rather than accepted from the request, so a caller cannot
+    claim to be a higher-trust source than "someone submitted this".
+    """
+    db = get_db()
+    now = datetime.now(timezone.utc)
+    location_text = (body.location_text or "").strip() or None
+
+    sig = SignalIn(
+        source=SourceRef(
+            type="citizen_report",
+            name="Public report",
+            collector="citizen-report-form",
+            local=True,
+        ),
+        text=body.text.strip(),
+        title=location_text,
+        location_hint=(
+            LocationHint(lat=body.lat, lon=body.lon, place=location_text, confidence=0.9, method="citizen_pin")
+            if body.lat is not None and body.lon is not None
+            else None
+        ),
+    )
+    doc = build_document(sig, now)
+    contact = (body.contact or "").strip()
+    if contact:
+        doc["reporter_contact"] = contact
+
+    try:
+        db.signals.insert_one(doc)
+    except DuplicateKeyError:
+        pass  # identical text submitted twice in a row; treat as accepted either way
+
+    return {"ok": True, "signal_id": doc["signal_id"], "disclaimer": REPORT_DISCLAIMER}
 
 
 @app.get("/signals")
@@ -381,11 +460,12 @@ def clusters_geojson(
     cutoff = parse_since(since)
     if cutoff:
         q["last_seen"] = {"$gte": cutoff}
-    cur = db.clusters.find(q).sort([("source_count", -1), ("last_seen", -1)]).limit(limit)
+    clusters = list(db.clusters.find(q).sort([("source_count", -1), ("last_seen", -1)]).limit(limit))
+    verified_counts = _verified_counts_by_cluster(db, clusters)
     return {
         "type": "FeatureCollection",
         "disclaimer": DISCLAIMER,
-        "features": [cluster_feature(d) for d in cur],
+        "features": [cluster_feature(d, verified_counts.get(d["cluster_id"], 0)) for d in clusters],
     }
 
 
