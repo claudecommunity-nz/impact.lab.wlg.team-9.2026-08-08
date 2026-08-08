@@ -161,6 +161,11 @@ No — it's a prototype built today on hazard-planning and public data. In an
 emergency, 111.
 
 **"What would you do next?"**
-Prioritisation triage (people at risk → property → transport → monitor), and
-"pieces on the board" — when a cluster needs checking, notify Council staff
-already near that location.
+Surface the triage tiers in the interface. The backend already stamps every
+cluster **people at risk → property → transport → monitor** with the exact
+keywords that put it there (merged, #18) — it just isn't on screen yet, so
+sort the list by tier and add a neutral chip. Colour stays reserved for
+corroboration.
+
+After that, "pieces on the board" — when a cluster needs checking, notify
+Council staff already near that location.
