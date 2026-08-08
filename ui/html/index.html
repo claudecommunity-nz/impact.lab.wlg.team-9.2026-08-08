@@ -297,6 +297,10 @@ aside {
   white-space: nowrap;
 }
 .chip.synthetic { border-color: var(--status-warning); color: var(--text-primary); }
+.chip.verified { border-color: var(--status-good); color: var(--text-primary); font-weight: 650; }
+.verify-btn { font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 5px;
+  border: 1px solid var(--gridline); background: var(--surface-1); color: var(--text-primary); cursor: pointer; }
+.verify-btn:hover { border-color: var(--status-good); }
 .chip.grade { font-weight: 650; color: var(--text-primary); font-variant-numeric: tabular-nums; }
 
 /* --- detail ------------------------------------------------------------- */
@@ -746,6 +750,7 @@ function renderList() {
       </div>
       <div class="card-sub" style="margin-top:6px">
         ${p.admiralty_grade ? `<span class="chip grade" title="${p.admiralty_meaning || ""}">${p.admiralty_grade}</span>` : ""}
+        ${p.verification_status === "field_verified" ? `<span class="chip verified">✓ field-verified</span>` : ""}
         ${sources.slice(0, 3).map((s) => `<span class="chip">${s}</span>`).join(" ")}
         ${sources.length > 3 ? `<span class="chip">+${sources.length - 3} more</span>` : ""}
         ${p.contains_synthetic === true || p.contains_synthetic === "true"
@@ -782,6 +787,13 @@ async function openCluster(id) {
       first seen ${timeAgo(c.first_seen)}, latest ${timeAgo(c.last_seen)}</div>
     ${adm.grade ? `<div class="card-sub">Admiralty grade ${adm.grade} · ${adm.meaning}</div>` : ""}
 
+    <div style="margin-top:8px">
+      ${c.verification_status === "field_verified"
+        ? `<span class="chip verified">✓ field-verified</span>${c.verified_note ? ` <span class="card-sub" style="display:inline">${c.verified_note}</span>` : ""}`
+        : `<button class="verify-btn" id="verify-btn" data-id="${c.cluster_id}">Mark field-verified</button>
+           <span class="card-sub" style="display:inline"> records a person's confirmation — grades lift to 1 on the next tick</span>`}
+    </div>
+
     <div class="warning-strip" style="margin:10px 0; flex:none">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
         <path d="M8 1.5 15 14H1L8 1.5Z" stroke="var(--status-warning)" stroke-width="1.5" stroke-linejoin="round"/>
@@ -797,6 +809,15 @@ async function openCluster(id) {
     <div class="section-title" style="margin:16px 0 0">The ${c.signal_count} item${c.signal_count === 1 ? "" : "s"} behind this</div>
     ${data.signals.map(renderMember).join("")}
   `;
+
+  const vbtn = document.getElementById("verify-btn");
+  if (vbtn) vbtn.addEventListener("click", async () => {
+    await fetch(`${API}/clusters/${encodeURIComponent(vbtn.dataset.id)}/verify`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note: "Marked verified from the map UI (prototype)" }),
+    });
+    openCluster(vbtn.dataset.id);
+  });
 
   document.getElementById("list-view").style.display = "none";
   document.getElementById("detail").classList.add("open");
