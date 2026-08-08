@@ -12,8 +12,8 @@
 # the data survives the group being deleted and recreated on every deploy.
 
 apiVersion: "2021-10-01"
-location: __LOCATION__
-name: __GROUP_NAME__
+location: "__LOCATION__"
+name: "__GROUP_NAME__"
 type: Microsoft.ContainerInstance/containerGroups
 
 properties:
@@ -21,13 +21,13 @@ properties:
   restartPolicy: Always
 
   imageRegistryCredentials:
-    - server: __ACR_SERVER__
-      username: __ACR_USERNAME__
-      password: __ACR_PASSWORD__
+    - server: "__ACR_SERVER__"
+      username: "__ACR_USERNAME__"
+      password: "__ACR_PASSWORD__"
 
   ipAddress:
     type: Public
-    dnsNameLabel: __DNS_LABEL__
+    dnsNameLabel: "__DNS_LABEL__"
     ports:
       - protocol: tcp
         port: 443     # UI over HTTPS, via Caddy
@@ -46,8 +46,8 @@ properties:
     - name: caddy-data
       azureFile:
         shareName: caddy-data
-        storageAccountName: __STORAGE_ACCOUNT__
-        storageAccountKey: __STORAGE_KEY__
+        storageAccountName: "__STORAGE_ACCOUNT__"
+        storageAccountKey: "__STORAGE_KEY__"
 
   containers:
     # --- ingestion API -----------------------------------------------------
@@ -55,14 +55,14 @@ properties:
     # group, so a redeploy (which always recreates the group) keeps its data.
     - name: api
       properties:
-        image: __ACR_SERVER__/team9-ingestion:__TAG__
+        image: "__ACR_SERVER__/team9-ingestion:__TAG__"
         ports:
           - port: 8000
         environmentVariables:
           # secureValue keeps the connection string out of `az container show`
           # and out of the portal's environment listing.
           - name: MONGO_URI
-            secureValue: __MONGO_URI__
+            secureValue: "__MONGO_URI__"
           - name: MONGO_DB
             value: signals
           - name: LOG_LEVEL
@@ -78,7 +78,7 @@ properties:
     # that a scraper polling every ten minutes does not justify.
     - name: scrapers
       properties:
-        image: __ACR_SERVER__/team9-scrapers:__TAG__
+        image: "__ACR_SERVER__/team9-scrapers:__TAG__"
         environmentVariables:
           - name: INGESTION_URL
             value: http://127.0.0.1:8000
@@ -100,14 +100,14 @@ properties:
           # on the dashboard rather than failing, so a missing credential
           # never takes a deploy down.
           - name: REDDIT_API_KEY
-            secureValue: __REDDIT_API_KEY__
+            secureValue: "__REDDIT_API_KEY__"
           # The corpus is historical, so the collector runs on a clock shifted
           # back by the interval between these two anchors. Plain values, not
           # secure ones — the whole point is that the shift is visible.
           - name: SIM_ANCHOR
-            value: __SIM_ANCHOR__
+            value: "__SIM_ANCHOR__"
           - name: SIM_REAL_ANCHOR
-            value: __SIM_REAL_ANCHOR__
+            value: "__SIM_REAL_ANCHOR__"
         resources:
           requests:
             cpu: 0.5
@@ -116,10 +116,10 @@ properties:
     # --- enrichment --------------------------------------------------------
     - name: enrichment
       properties:
-        image: __ACR_SERVER__/team9-enrichment:__TAG__
+        image: "__ACR_SERVER__/team9-enrichment:__TAG__"
         environmentVariables:
           - name: MONGO_URI
-            secureValue: __MONGO_URI__
+            secureValue: "__MONGO_URI__"
           - name: MONGO_DB
             value: signals
           # Keep in step with the default in docker-compose.yml. A job that
@@ -142,7 +142,7 @@ properties:
     # --- UI ----------------------------------------------------------------
     - name: ui
       properties:
-        image: __ACR_SERVER__/team9-ui:__TAG__
+        image: "__ACR_SERVER__/team9-ui:__TAG__"
         ports:
           - port: 8080
         environmentVariables:
@@ -178,7 +178,7 @@ properties:
           - caddy
           - reverse-proxy
           - --from
-          - __FQDN__
+          - "__FQDN__"
           - --to
           - 127.0.0.1:8080
         ports:
@@ -199,4 +199,4 @@ properties:
 tags:
   project: impact-lab-wellington
   team: "9"
-  deployed-from: __DEPLOY_SOURCE__
+  deployed-from: "__DEPLOY_SOURCE__"

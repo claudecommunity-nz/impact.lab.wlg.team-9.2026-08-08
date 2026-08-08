@@ -40,6 +40,7 @@ export SIM_REAL_ANCHOR="${SIM_REAL_ANCHOR:-2026-08-08T00:00:00Z}"
 # and would corrupt the value silently.
 TEMPLATE_PATH="$TEMPLATE" python3 <<'PY'
 import os
+import re
 
 placeholders = [
     "LOCATION", "GROUP_NAME", "DNS_LABEL", "ACR_SERVER", "ACR_USERNAME",
@@ -51,8 +52,51 @@ placeholders = [
 with open(os.environ["TEMPLATE_PATH"]) as fh:
     text = fh.read()
 
+# Every placeholder must sit inside double quotes. Checked here because the
+# symptom of getting it wrong is not a YAML error — it is a value that parses
+# as the wrong type and comes back from Azure as a SerializationError with a
+# thousand-line dump. Cheaper to fail on the template.
+unquoted = []
+for lineno, line in enumerate(text.split("\n"), 1):
+    stripped = line.strip()
+    if "__" not in stripped or stripped.startswith("#"):
+        continue
+    for match in re.finditer(r"__[A-Z_]+__", line):
+        before = line[: match.start()]
+        after = line[match.end():]
+        if before.count('"') % 2 == 0 or '"' not in after:
+            unquoted.append(f"  line {lineno}: {stripped}")
+            break
+if unquoted:
+    raise SystemExit(
+        "render-aci.sh: these placeholders are not inside double quotes —\n"
+        + "\n".join(unquoted)
+        + "\n\nYAML types bare scalars: an ISO timestamp becomes a datetime, an\n"
+          "all-digit git SHA becomes an int, and Azure rejects both."
+    )
+
+
+def yaml_escape(value: str) -> str:
+    """Escape for a double-quoted YAML scalar.
+
+    Every placeholder in the template sits inside double quotes, because YAML
+    guesses types for bare scalars and guesses wrong in ways that surface as
+    an unreadable serialization error from Azure rather than a YAML complaint:
+
+      2026-04-20T00:00:00Z   -> a datetime, not a string
+      1234567                -> an int, if a git SHA happens to be all digits
+      no / yes / on          -> a bool
+
+    Quoting removes the guessing. This only has to make the value safe inside
+    those quotes — backslash and double-quote are the two characters that would
+    otherwise end the scalar early, and a storage key or connection string can
+    contain either.
+    """
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 for name in placeholders:
-    text = text.replace(f"__{name}__", os.environ[name])
+    text = text.replace(f"__{name}__", yaml_escape(os.environ[name]))
 
 leftover = [p for p in placeholders if f"__{p}__" in text]
 if leftover:
