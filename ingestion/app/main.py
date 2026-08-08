@@ -116,10 +116,11 @@ def signal_filter(
 
 def signal_feature(doc: dict) -> dict:
     """One signal as a GeoJSON point feature, reliability included."""
-    enrich = doc.get("enrichment", {})
-    classify = enrich.get("classify", {})
-    geoloc = enrich.get("geolocate", {})
-    corrob = enrich.get("corroborate", {})
+    enrich = doc.get("enrichment") or {}
+    classify = enrich.get("classify") or {}
+    geoloc = enrich.get("geolocate") or {}
+    corrob = enrich.get("corroborate") or {}
+    admiralty = enrich.get("admiralty") or {}
     return {
         "type": "Feature",
         "geometry": doc["geo"],
@@ -143,12 +144,17 @@ def signal_feature(doc: dict) -> dict:
             "location_method": geoloc.get("method"),
             "cluster_id": corrob.get("cluster_id"),
             "source_count": corrob.get("source_count", 1),
+            "admiralty_grade": admiralty.get("grade"),
+            "admiralty_reliability": admiralty.get("source_reliability"),
+            "admiralty_credibility": admiralty.get("info_credibility"),
+            "admiralty_meaning": admiralty.get("meaning"),
             "verification_status": doc.get("verification", {}).get("status", "unverified"),
         },
     }
 
 
 def cluster_feature(doc: dict) -> dict:
+    adm = doc.get("admiralty") or {}
     return {
         "type": "Feature",
         "geometry": doc["geo"],
@@ -159,6 +165,10 @@ def cluster_feature(doc: dict) -> dict:
             "signal_count": doc["signal_count"],
             "sources": doc["sources"],
             "corroboration": doc.get("corroboration"),
+            "admiralty_grade": adm.get("grade"),
+            "admiralty_reliability": adm.get("source_reliability"),
+            "admiralty_credibility": adm.get("info_credibility"),
+            "admiralty_meaning": adm.get("meaning"),
             "first_seen": _iso(doc.get("first_seen")),
             "last_seen": _iso(doc.get("last_seen")),
             "location_confidence": doc.get("location_confidence") or 0.0,
