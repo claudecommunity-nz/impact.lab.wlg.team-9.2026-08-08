@@ -1,4 +1,4 @@
-.PHONY: up down logs rebuild seed stats clean tools deploy
+.PHONY: up down logs rebuild seed enrich stats tools clean
 
 up:            ## build and start the whole pipeline
 	docker compose up --build -d

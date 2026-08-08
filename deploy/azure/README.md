@@ -1,12 +1,87 @@
 # Deploying to Azure
 
+> **Automatic deployment is currently switched off.**
+> The GitHub Actions workflow is disabled and its Azure credentials have been
+> deleted from the repository. Nothing deploys on push. See
+> [Re-enabling automatic deployment](#re-enabling-automatic-deployment) below.
+>
+> Deploying by hand from a checkout still works: `./deploy/azure/deploy.sh`.
+
 Compute runs in Azure Container Instances. The database is a free MongoDB Atlas
 cluster, outside Azure — real MongoDB, which is what this pipeline was built and
 tested against.
 
-Pushes to `main` deploy themselves via
+When it is switched on, pushes to `main` deploy themselves via
 [`.github/workflows/deploy-azure.yml`](../../.github/workflows/deploy-azure.yml).
 Before that works, one person runs the bootstrap once.
+
+## Re-enabling automatic deployment
+
+What was removed, and nothing else: the workflow was disabled, and the three
+repository **secrets** (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+`AZURE_SUBSCRIPTION_ID`) were deleted.
+
+The eight repository **variables** were deliberately kept — they are resource
+names rather than credentials, and they are what the workflow needs to find the
+existing deployment rather than build a second one:
+
+```
+ACI_DNS_LABEL  ACI_GROUP_NAME  AZURE_ACR_NAME  AZURE_KEY_VAULT_NAME
+AZURE_LOCATION  AZURE_RESOURCE_GROUP  AZURE_STORAGE_ACCOUNT  MONGO_SECRET_NAME
+```
+
+Also untouched: everything in Azure, everything in Key Vault, and the Entra app
+registration with its GitHub OIDC federation. So turning it back on is short.
+
+**If the Azure resources still exist** — re-running the bootstrap recreates the
+three secrets from what is already there and changes nothing else:
+
+```bash
+az login                              # the account that hosts the deployment
+./deploy/azure/bootstrap.sh           # adopts what exists; will not duplicate
+gh workflow enable deploy-azure.yml
+```
+
+The bootstrap reads the database connection string back out of Key Vault, so it
+will not ask you for it. It is safe to re-run.
+
+**If the resource group has been deleted**, the same command rebuilds
+everything from nothing — registry, Key Vault, storage, app registration,
+federated credentials — and prints what it made. You will need the Atlas
+connection string again, and you will want to check the Atlas cluster still
+exists, since `deploy.sh destroy` never touched it.
+
+**To confirm it is back on:**
+
+```bash
+gh workflow run deploy-azure.yml
+gh run watch
+```
+
+The workflow smoke tests what it deploys, so a green run means the site is
+actually up rather than that `az` returned zero.
+
+### Turning it off again
+
+```bash
+gh workflow disable deploy-azure.yml
+for s in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
+  gh secret delete "$s"
+done
+```
+
+That stops deployments. It does **not** stop the running container group or its
+billing — `./deploy/azure/deploy.sh stop` does that — and it does not remove
+the Entra app registration, which still trusts this repository's `main` branch.
+To revoke that too:
+
+```bash
+az ad app delete --id "$(az ad app list \
+  --display-name team9-signals-github-deploy --query '[0].appId' -o tsv)"
+```
+
+Do that only if you are finished with the deployment. Re-running the bootstrap
+recreates it.
 
 ## What you have to do by hand
 

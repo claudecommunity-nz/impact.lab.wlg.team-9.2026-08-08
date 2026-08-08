@@ -21,24 +21,83 @@ There may be an opportunity to develop this option in collaboration with doctora
 
 ## Running it
 
+You need Docker. Nothing else — no Python, no Node, no Azure account.
+
 ```bash
+git clone git@github.com:claudecommunity-nz/impact.lab.wlg.team-9.2026-08-08.git
+cd impact.lab.wlg.team-9.2026-08-08
+
 docker compose up --build -d      # or: make up
 open http://localhost:8080
 ```
 
-Four scrapers start polling immediately and the map fills in within a minute.
-`make down` stops it, `make clean` also drops the database.
+First build takes a few minutes. After that the collectors poll immediately and
+the map fills in within about a minute — a cold start reaches roughly 130
+signals and 50 groups in 90 seconds.
 
 | | |
 |---|---|
 | UI | http://localhost:8080 |
+| Pipeline dashboard | http://localhost:8080/#pipeline |
+| Raw data | http://localhost:8080/#data |
 | API docs | http://localhost:8000/docs |
 | What's in the store | http://localhost:8000/stats |
 | Signals as GeoJSON | http://localhost:8000/signals.geojson |
 | Groups as GeoJSON | http://localhost:8000/clusters.geojson |
 
-Deploying to Azure Container Instances: `./deploy/azure/deploy.sh` — see
-[deploy/azure/README.md](deploy/azure/README.md).
+```bash
+make logs        # tail everything
+make stats       # what's in the store right now
+make enrich      # run every enrichment job once, now
+make down        # stop, keep the database
+make clean       # stop and drop the database volume
+```
+
+Most collectors need no credentials — GeoNet, the RSS feeds, Mastodon, NZTA and
+Wellington Electricity are all public. Two exceptions:
+
+**The Reddit corpus** needs an API key. Without it that one collector reports
+itself as `skipped` on the pipeline dashboard and everything else runs normally.
+With a key:
+
+```bash
+export REDDIT_API_KEY="paste-the-key"
+docker compose up -d scraper-reddit
+```
+
+If you have access to the team's Azure Key Vault, take it from there rather
+than keeping a copy on disk:
+
+```bash
+export REDDIT_API_KEY="$(az keyvault secret show \
+  --vault-name team9-kv-f76f44cb --name reddit-api-key --query value -o tsv)"
+```
+
+**The fixture collector** needs nothing and is local-only. It replays synthetic
+Wellington scenarios so the map has content with no network at all, and every
+item it produces is labelled as sample data through the API, the map and the
+table. It is deliberately not part of the deployed configuration.
+
+### If something looks wrong
+
+Open the **pipeline dashboard** first — `http://localhost:8080/#pipeline`. It
+shows every collector and enrichment job, when each last ran, what it polled
+and what it returned. A collector that has quietly stopped looks identical to a
+quiet one from the map, and this is the page that tells them apart.
+
+## Deployment
+
+The prototype was deployed to Azure Container Instances during the build, with
+MongoDB Atlas for storage, secrets in Azure Key Vault and HTTPS via Caddy.
+
+**Automatic deployment is currently switched off.** The GitHub Actions workflow
+is disabled and its Azure credentials have been removed from the repository, so
+nothing deploys on push. Everything needed to turn it back on is in
+[deploy/azure/README.md](deploy/azure/README.md) — see *Re-enabling automatic
+deployment*.
+
+Deploying by hand from a checkout still works, given an Azure login:
+`./deploy/azure/deploy.sh`.
 
 ## The pipeline
 
