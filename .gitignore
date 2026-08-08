@@ -6,3 +6,4 @@ venv/
 .DS_Store
 deploy/azure/aci.generated.yaml
 deploy/azure/.azure-env
+deploy/azure/.mongo-uri

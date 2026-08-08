@@ -1,1 +1,4 @@
 pymongo==4.10.1
+# Required, not optional: Atlas hands out a mongodb+srv:// connection string,
+# and pymongo cannot resolve one without this.
+dnspython==2.7.0

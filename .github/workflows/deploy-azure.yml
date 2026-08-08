@@ -1,0 +1,208 @@
+name: Deploy to Azure
+
+# Run deploy/azure/bootstrap.sh once before this will work — it creates the
+# infrastructure and the OIDC federation this workflow authenticates with.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "LICENSE"
+  workflow_dispatch:
+    inputs:
+      rebuild_all:
+        description: "Rebuild every image even if nothing in it changed"
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write # required to request the OIDC token
+  contents: read
+
+# One deploy at a time. Recreating a container group while another run is
+# midway through doing the same leaves it in a state neither run expects.
+concurrency:
+  group: azure-deploy
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.sha }}
+
+jobs:
+  build:
+    name: Build ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        image: [ingestion, scrapers, enrichment, ui]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sign in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Built in Azure rather than on the runner. ACI is amd64-only, and this
+      # keeps the build architecture correct no matter what builds it —
+      # including a local run from an Apple Silicon Mac.
+      - name: Build and push team9-${{ matrix.image }}
+        run: |
+          az acr build \
+            --registry "${{ vars.AZURE_ACR_NAME }}" \
+            --image "team9-${{ matrix.image }}:${TAG}" \
+            --image "team9-${{ matrix.image }}:latest" \
+            --platform linux/amd64 \
+            --file "${{ matrix.image }}/Dockerfile" \
+            "${{ matrix.image }}"
+
+  deploy:
+    name: Deploy container group
+    runs-on: ubuntu-latest
+    needs: build
+    outputs:
+      url: ${{ steps.urls.outputs.ui }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sign in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Read from Key Vault, not from a repo secret. Repo secrets are readable
+      # by a workflow on any branch, so anyone with push access could print
+      # them; the OIDC federation this job authenticates with is scoped to
+      # refs/heads/main, so reaching the vault takes a merge.
+      - name: Read the database connection string from Key Vault
+        run: |
+          if ! MONGO_URI="$(az keyvault secret show \
+                --vault-name '${{ vars.AZURE_KEY_VAULT_NAME }}' \
+                --name '${{ vars.MONGO_SECRET_NAME }}' \
+                --query value -o tsv 2>&1)"; then
+            echo "::error::Could not read '${{ vars.MONGO_SECRET_NAME }}' from Key Vault '${{ vars.AZURE_KEY_VAULT_NAME }}'. Check the deploy identity still has the 'Key Vault Secrets User' role. Re-run deploy/azure/bootstrap.sh to repair."
+            exit 1
+          fi
+          # Belt and braces: Actions masks registered secrets, but this value
+          # never was one.
+          echo "::add-mask::$MONGO_URI"
+          echo "MONGO_URI=$MONGO_URI" >> "$GITHUB_ENV"
+
+      - name: Read the registry credentials
+        run: |
+          ACR_PASSWORD="$(az acr credential show \
+            --name '${{ vars.AZURE_ACR_NAME }}' \
+            --query 'passwords[0].value' -o tsv)"
+          echo "::add-mask::$ACR_PASSWORD"
+          {
+            echo "ACR_PASSWORD=$ACR_PASSWORD"
+            echo "ACR_SERVER=$(az acr show --name '${{ vars.AZURE_ACR_NAME }}' --query loginServer -o tsv)"
+            echo "ACR_USERNAME=$(az acr credential show --name '${{ vars.AZURE_ACR_NAME }}' --query username -o tsv)"
+          } >> "$GITHUB_ENV"
+
+      - name: Render the container group definition
+        env:
+          LOCATION: ${{ vars.AZURE_LOCATION }}
+          GROUP_NAME: ${{ vars.ACI_GROUP_NAME }}
+          DNS_LABEL: ${{ vars.ACI_DNS_LABEL }}
+          DEPLOY_SOURCE: github-actions
+          # MONGO_URI comes from the Key Vault step above, via GITHUB_ENV.
+        run: |
+          chmod +x deploy/azure/render-aci.sh
+          ./deploy/azure/render-aci.sh > aci.generated.yaml
+          # Confirm the secret did not survive into the log-visible output.
+          grep -q "secureValue" aci.generated.yaml
+
+      # A container group cannot be updated in place — the image tag changes on
+      # every commit, and that is not a mutable field. Delete, then create.
+      - name: Replace the container group
+        run: |
+          if az container show \
+               --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+               --name "${{ vars.ACI_GROUP_NAME }}" >/dev/null 2>&1; then
+            echo "Deleting the previous group"
+            az container delete \
+              --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+              --name "${{ vars.ACI_GROUP_NAME }}" --yes --output none
+          fi
+
+          az container create \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --file aci.generated.yaml \
+            --output none
+
+      - name: Work out the public URLs
+        id: urls
+        run: |
+          FQDN="$(az container show \
+            --resource-group '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            --name '${{ vars.ACI_GROUP_NAME }}' \
+            --query ipAddress.fqdn -o tsv)"
+          echo "fqdn=$FQDN"        >> "$GITHUB_OUTPUT"
+          echo "ui=http://$FQDN/"  >> "$GITHUB_OUTPUT"
+
+      # Deploying is not the same as working. This fails the run if the stack
+      # comes up unhealthy, rather than reporting a green tick on a broken app.
+      - name: Smoke test
+        run: |
+          FQDN="${{ steps.urls.outputs.fqdn }}"
+
+          echo "Waiting for the API to answer..."
+          for attempt in $(seq 1 40); do
+            if curl -sf --max-time 10 "http://$FQDN:8000/healthz" >/dev/null; then
+              echo "API healthy after ~$((attempt * 15))s"
+              break
+            fi
+            if [ "$attempt" -eq 40 ]; then
+              echo "::error::API never became healthy"
+              az container logs --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+                --name "${{ vars.ACI_GROUP_NAME }}" --container-name api --tail 60 || true
+              exit 1
+            fi
+            sleep 15
+          done
+
+          echo "Checking the UI is served..."
+          curl -sf --max-time 10 -o /dev/null "http://$FQDN/" \
+            || { echo "::error::UI did not respond"; exit 1; }
+
+          echo "Checking GeoJSON endpoints are valid JSON..."
+          curl -sf --max-time 20 "http://$FQDN:8000/clusters.geojson" | python3 -c \
+            "import json,sys; d=json.load(sys.stdin); assert d['type']=='FeatureCollection'; print('clusters.geojson OK')"
+
+          echo "Waiting for the first scrape to land..."
+          for attempt in $(seq 1 20); do
+            TOTAL="$(curl -sf --max-time 10 "http://$FQDN:8000/stats" \
+              | python3 -c "import json,sys; print(json.load(sys.stdin)['signals']['total'])" 2>/dev/null || echo 0)"
+            if [ "${TOTAL:-0}" -gt 0 ]; then
+              echo "$TOTAL signals ingested"
+              break
+            fi
+            sleep 15
+          done
+
+          curl -sf --max-time 10 "http://$FQDN:8000/stats" | python3 -m json.tool
+
+      - name: Summary
+        if: always()
+        run: |
+          FQDN="${{ steps.urls.outputs.fqdn }}"
+          {
+            echo "## Deployed"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| UI | http://$FQDN/ |"
+            echo "| API docs | http://$FQDN:8000/docs |"
+            echo "| Stats | http://$FQDN:8000/stats |"
+            echo "| Signals GeoJSON | http://$FQDN:8000/signals.geojson |"
+            echo "| Groups GeoJSON | http://$FQDN:8000/clusters.geojson |"
+            echo ""
+            echo "Image tag \`${TAG}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

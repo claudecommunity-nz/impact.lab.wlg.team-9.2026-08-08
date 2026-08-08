@@ -1,13 +1,15 @@
 # Azure Container Instances container group.
 #
-# Generated from this template by deploy.sh — __PLACEHOLDERS__ are substituted
-# there. Deploy the generated file with:
+# Generated from this template by render-aci.sh — __PLACEHOLDERS__ are
+# substituted there. Deploy the generated file with:
 #
 #     az container create --resource-group <rg> --file aci.generated.yaml
 #
 # Every container in a group shares one network namespace, so services address
-# each other on 127.0.0.1 rather than by compose service name. That is the only
-# real difference from docker-compose.yml.
+# each other on 127.0.0.1 rather than by compose service name. That is the main
+# difference from docker-compose.yml. The other is storage: compose runs its own
+# MongoDB container, this points at a MongoDB Atlas cluster outside Azure, so
+# the data survives the group being deleted and recreated on every deploy.
 
 apiVersion: "2021-10-01"
 location: __LOCATION__
@@ -34,30 +36,19 @@ properties:
                       # /signals.geojson and /clusters.geojson directly
 
   containers:
-    # --- database ----------------------------------------------------------
-    # Storage is ephemeral: the group's data is lost if it restarts, and the
-    # scrapers refill it within a poll interval. MongoDB does not support
-    # running on an SMB/CIFS mount, so an Azure Files volume is not an option
-    # here — see README.md for the Cosmos DB swap if you need persistence.
-    - name: mongo
-      properties:
-        image: mongo:7
-        ports:
-          - port: 27017
-        resources:
-          requests:
-            cpu: 1.0
-            memoryInGB: 1.5
-
     # --- ingestion API -----------------------------------------------------
+    # No mongo container: storage is a MongoDB Atlas cluster, outside the
+    # group, so a redeploy (which always recreates the group) keeps its data.
     - name: api
       properties:
         image: __ACR_SERVER__/team9-ingestion:__TAG__
         ports:
           - port: 8000
         environmentVariables:
+          # secureValue keeps the connection string out of `az container show`
+          # and out of the portal's environment listing.
           - name: MONGO_URI
-            value: mongodb://127.0.0.1:27017
+            secureValue: __MONGO_URI__
           - name: MONGO_DB
             value: signals
           - name: LOG_LEVEL
@@ -94,7 +85,7 @@ properties:
         image: __ACR_SERVER__/team9-enrichment:__TAG__
         environmentVariables:
           - name: MONGO_URI
-            value: mongodb://127.0.0.1:27017
+            secureValue: __MONGO_URI__
           - name: MONGO_DB
             value: signals
           - name: ENRICHMENT_SCHEDULE
@@ -130,3 +121,4 @@ properties:
 tags:
   project: impact-lab-wellington
   team: "9"
+  deployed-from: __DEPLOY_SOURCE__
