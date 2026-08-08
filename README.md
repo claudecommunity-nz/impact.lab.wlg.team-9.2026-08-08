@@ -19,6 +19,30 @@ There may be an opportunity to develop this option in collaboration with doctora
 
 ---
 
+## What we built — watch the four-minute demo
+
+**[demo/out/walkthrough.mp4](demo/out/walkthrough.mp4)** · slides:
+**[eoc-signal-demo v0.2.pdf](eoc-signal-demo%20v0.2.pdf)**
+
+Recorded on the day, against this stack running on a laptop. Six beats, each
+one a claim from the deck followed immediately by the thing on screen that
+backs it:
+
+| | |
+|---|---|
+| 0:00 | The problem — an operations centre spends its first hours working out what is going on |
+| 0:30 | Eight collectors polling public sources, and when each last returned anything |
+| 1:08 | The raw store — every item, unverified, with the evidence behind each inference |
+| 1:46 | The map, where colour means corroboration and nothing else |
+| 2:31 | A signal being confirmed by a human — the only route to credibility grade 1 |
+| 3:14 | GeoJSON out of an open endpoint, for the shared operating picture |
+
+The whole video regenerates from this repo — see [demo/](demo/). The narration
+is `demo/narration.md`, and the voiceover, slides, screen capture and final cut
+are four commands.
+
+---
+
 ## Running it
 
 You need Docker. Nothing else — no Python, no Node, no Azure account.

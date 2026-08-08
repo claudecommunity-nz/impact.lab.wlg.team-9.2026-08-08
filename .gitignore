@@ -4,10 +4,14 @@ __pycache__/
 .venv/
 venv/
 .DS_Store
-demo/out/screen.webm
-demo/out/audio/
-demo/out/voiceover.wav
-demo/out/walkthrough-silent.mp4
+# Everything the demo build produces is regenerable, except the finished
+# video — that is the submission artefact and is kept. Excluding the directory
+# contents rather than naming each intermediate means the next stray check
+# screenshot is ignored without anyone having to notice it.
+demo/out/*
+!demo/out/walkthrough.mp4
+# Rendered from the committed deck by demo/slides.py.
+demo/slides/*.png
 deploy/azure/aci.generated.yaml
 deploy/azure/.azure-env
 deploy/azure/.mongo-uri
