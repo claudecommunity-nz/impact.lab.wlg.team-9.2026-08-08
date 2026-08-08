@@ -39,7 +39,12 @@ services:
     restart: unless-stopped
     environment:
       <<: *mongo
+      # Serves processed screenshots back to the review page. Read-only: the
+      # API only ever reads this directory, the collector owns writing to it.
+      SCREENSHOT_INBOX: /inbox
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./screenshot-inbox:/inbox:ro
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
@@ -125,9 +130,16 @@ services:
       SOURCES: nzta
       SCRAPE_INTERVAL_SECONDS: ${NZTA_INTERVAL:-120}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-  # Community-shared screenshots of social posts, parsed with a vision model.
-  # Nothing is scraped from any platform: a person chooses to share what they
-  # can already see. Without GEMINI_API_KEY the service idles and logs.
+  # Community-shared screenshots of social posts, read by Claude. Nothing is
+  # scraped from any platform: a person chooses to share what they can already
+  # see. Without ANTHROPIC_API_KEY the service idles and logs.
+  #
+  #   export ANTHROPIC_API_KEY="$(az keyvault secret show \
+  #     --vault-name <vault> --name anthropic-api-key --query value -o tsv)"
+  #
+  # The inbox is this directory locally and an Azure Blob container in the
+  # deployment, where a container group's filesystem doesn't survive a deploy
+  # and nobody outside the container could write to it anyway.
   scraper-screenshots:
     <<: *scraper
     environment:
@@ -135,7 +147,9 @@ services:
       SOURCES: screenshots
       SCRAPE_INTERVAL_SECONDS: ${SCREENSHOT_INTERVAL:-20}
       SCREENSHOT_INBOX: /inbox
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      SCREENSHOT_BLOB_URL: ${SCREENSHOT_BLOB_URL:-}
+      SCREENSHOT_BLOB_SAS: ${SCREENSHOT_BLOB_SAS:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - ./screenshot-inbox:/inbox

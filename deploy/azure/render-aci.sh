@@ -34,6 +34,9 @@ done
 export REDDIT_API_KEY="${REDDIT_API_KEY:-}"
 export SIM_ANCHOR="${SIM_ANCHOR:-2026-04-20T00:00:00Z}"
 export SIM_REAL_ANCHOR="${SIM_REAL_ANCHOR:-2026-08-08T00:00:00Z}"
+export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+export SCREENSHOT_BLOB_URL="${SCREENSHOT_BLOB_URL:-}"
+export SCREENSHOT_BLOB_SAS="${SCREENSHOT_BLOB_SAS:-}"
 
 # Substituted in Python, not sed: a MongoDB connection string routinely
 # contains & and /, both of which mean something to sed's replacement syntax
@@ -47,10 +50,36 @@ placeholders = [
     "ACR_PASSWORD", "TAG", "MONGO_URI", "DEPLOY_SOURCE", "FQDN",
     "STORAGE_ACCOUNT", "STORAGE_KEY", "REDDIT_API_KEY",
     "SIM_ANCHOR", "SIM_REAL_ANCHOR",
+    "ANTHROPIC_API_KEY", "SCREENSHOT_BLOB_URL", "SCREENSHOT_BLOB_SAS",
 ]
 
 with open(os.environ["TEMPLATE_PATH"]) as fh:
     text = fh.read()
+
+# Blocks between #<<<NAME and #>>>NAME are dropped when the feature they need
+# is not configured, rather than rendered with empty values. ACI's handling of
+# an empty secureValue is not something to find out about four minutes before
+# a demo, and a collector with no key could only idle anyway.
+#
+# Resolved before the quoting check below, so a dropped block's placeholders
+# are simply not there to check.
+def strip_optional_block(text: str, name: str, keep: bool) -> str:
+    pattern = re.compile(
+        rf"^[ \t]*#<<<{name}\n(?P<body>.*?)^[ \t]*#>>>{name}\n",
+        re.DOTALL | re.MULTILINE,
+    )
+    return pattern.sub((lambda m: m.group("body")) if keep else "", text)
+
+
+text = strip_optional_block(
+    text,
+    "SCREENSHOTS",
+    bool(
+        os.environ["ANTHROPIC_API_KEY"]
+        and os.environ["SCREENSHOT_BLOB_URL"]
+        and os.environ["SCREENSHOT_BLOB_SAS"]
+    ),
+)
 
 # Every placeholder must sit inside double quotes. Checked here because the
 # symptom of getting it wrong is not a YAML error — it is a value that parses

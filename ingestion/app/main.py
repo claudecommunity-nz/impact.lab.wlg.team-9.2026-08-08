@@ -17,16 +17,18 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
+from . import screenshots
 from .db import ensure_indexes, get_db
 from .models import IngestResult, RunReport, SignalBatch, SignalIn
 
 # Sources anyone can post to with no editorial gate — the ones a human should
 # look at before the map treats them as anything more than "someone said so".
-REVIEW_SOURCE_TYPES = ["mastodon", "rss"]
+REVIEW_SOURCE_TYPES = ["mastodon", "rss", "screenshot"]
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -102,8 +104,10 @@ def clean(doc: dict) -> dict:
 def public_signal(doc: dict) -> dict:
     """A signal doc safe to hand to a client.
 
-    Every media item is just a link to wherever the publisher already hosts
-    it — nothing is uploaded to or stored by this API.
+    Media from a publisher is a link to wherever they already host it. The one
+    exception is a shared screenshot, which nobody else hosts: those carry a
+    `/screenshots/<name>` path served by this API out of the store the
+    collector wrote them to.
     """
     doc = clean(doc)
     doc["media"] = [{"type": m.get("type", "image"), "url": m["url"]} for m in doc.get("media") or []]
@@ -414,6 +418,33 @@ REVIEW_DISCLAIMER = (
     "Confirming here records that a person found an item plausible — it is not "
     "official confirmation that the event happened. In an emergency, call 111."
 )
+
+
+@app.get("/screenshots/{name}")
+def get_screenshot(name: str):
+    """The image a screenshot-sourced signal was extracted from.
+
+    Served through the API rather than linked directly so the credential that
+    opens the store never reaches a public response. The image itself is
+    unredacted — the poster's name and profile photo are still in it, even
+    though they were stripped out of the signal's text — so the interface
+    blurs it until a reviewer chooses to look.
+    """
+    if not screenshots.is_valid_name(name):
+        raise HTTPException(404, "no such screenshot")
+    image = screenshots.read(name)
+    if image is None:
+        raise HTTPException(404, "no such screenshot")
+    return Response(
+        content=image,
+        media_type=screenshots.content_type(name),
+        headers={
+            # Content-addressed by sha1, so it can never change under the name.
+            "Cache-Control": "private, max-age=86400",
+            # Not for indexing: this is unredacted third-party content.
+            "X-Robots-Tag": "noindex, noimageindex",
+        },
+    )
 
 
 class VerifyRequest(BaseModel):

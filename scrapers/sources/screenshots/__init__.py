@@ -2,46 +2,93 @@
 
 Facebook and TikTok have no viable public API, and scraping logged-in feeds
 breaches ToS. The workaround used here: a community member screenshots a post
-they can already see and shares the image by dropping it into an inbox folder.
-This collector sends each image to the Gemini vision API, extracts the post's
-content as structured JSON, and hands it to the ingestion API like any other
-scraper. The human chooses to share; nothing is scraped from any platform.
+they can already see and shares the image by dropping it into an inbox. This
+collector sends each image to Claude, extracts the post's content as structured
+JSON, and hands it to the ingestion API like any other scraper. The human
+chooses to share; nothing is scraped from any platform.
 
 Privacy is load-bearing: usernames, handles and personal identifiers are
 forbidden in the extraction prompt and a redaction pass strips any that leak
-through. No profile information is stored.
+through. No profile information is stored — though the screenshot itself is
+unredacted, which is why the review interface blurs it until asked.
 """
 
 import base64
 import hashlib
+import json
 import logging
 import os
 import re
 from pathlib import Path
 
-import requests
+import anthropic
+
+from . import store
 
 log = logging.getLogger(__name__)
 
-MODEL = os.getenv("SCREENSHOT_VISION_MODEL", "gemini-3.1-flash-lite")
-API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+MODEL = os.getenv("SCREENSHOT_VISION_MODEL", "claude-opus-5")
 EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 MAX_PER_RUN = 10
 
+# Reading a screenshot is a scoped extraction, not a reasoning problem, so it
+# runs at low effort — cheaper and faster, and the schema below does the work
+# that a longer prompt would otherwise have to.
+EFFORT = "low"
+MAX_TOKENS = 8000
+
 PROMPT = (
-    "You are extracting the content of a social media post from a screenshot "
-    "that a community member chose to share during an emergency. "
-    "Return STRICT JSON only, no markdown fences:\n"
-    '{"platform": "facebook|instagram|tiktok|x|reddit|mastodon|other|unknown", '
-    '"text": "the post\'s main text, verbatim", '
-    '"author_type": "individual|organisation|news|unknown", '
-    '"posted_time_text": "the timestamp exactly as shown (e.g. \'2 hrs ago\'), or null", '
-    '"place_mentions": ["place names mentioned in the post"], '
-    '"is_social_post": true}\n'
-    "Never include usernames, handles, profile names, or any personal identifier "
-    "in any field. If the image is not a social media post, return "
-    '{"is_social_post": false}.'
+    "Extract the content of the social media post in this screenshot. A "
+    "community member chose to share it during an emergency in Wellington, "
+    "New Zealand.\n\n"
+    "Never include usernames, handles, profile names, or any other personal "
+    "identifier in any field — not in the text, not in the place mentions. "
+    "Transcribe the post's own words verbatim, but leave the identity of "
+    "whoever wrote them out of it.\n\n"
+    "If the image is not a social media post, set is_social_post to false and "
+    "leave the other fields empty."
 )
+
+# Structured outputs: the model is constrained to this shape, so there is no
+# prose to strip, no fences to unwrap, and no malformed-JSON retry path.
+EXTRACTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "is_social_post": {
+            "type": "boolean",
+            "description": "Whether the image shows a social media post at all.",
+        },
+        "platform": {
+            "type": "string",
+            "enum": [
+                "facebook", "instagram", "tiktok", "x",
+                "reddit", "mastodon", "other", "unknown",
+            ],
+        },
+        "text": {
+            "type": "string",
+            "description": "The post's main text, verbatim, with no usernames or handles.",
+        },
+        "author_type": {
+            "type": "string",
+            "enum": ["individual", "organisation", "news", "unknown"],
+        },
+        "posted_time_text": {
+            "type": "string",
+            "description": "The timestamp exactly as shown (e.g. '2 hrs ago'); empty if none.",
+        },
+        "place_mentions": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Place names mentioned in the post.",
+        },
+    },
+    "required": [
+        "is_social_post", "platform", "text",
+        "author_type", "posted_time_text", "place_mentions",
+    ],
+    "additionalProperties": False,
+}
 
 _HANDLE_RE = re.compile(r"@[\w.]+")
 
@@ -53,51 +100,61 @@ def redact_handles(text: str) -> str:
     return _HANDLE_RE.sub("@[redacted]", text)
 
 
-def parse_extraction(response_json: dict) -> dict | None:
-    """Dig ``candidates[0].content.parts[0].text`` out of a Gemini REST
-    response, strip optional ```json fences, ``json.loads`` it.
+def parse_extraction(message) -> dict | None:
+    """Pull the extraction out of a Claude response.
 
-    Any missing key, empty candidates, or invalid JSON → ``None`` (never raises).
+    Structured outputs guarantee the first text block is JSON matching
+    ``EXTRACTION_SCHEMA``, so this is mostly a safe unwrap: a refusal, a
+    truncated response, or anything unparseable returns ``None`` rather than
+    raising, because one unreadable screenshot must not stop the run.
+
+    Takes the response object (or anything shaped like one), so the caller
+    never has to reach into ``content`` itself.
     """
-    try:
-        candidates = response_json.get("candidates") or []
-        if not candidates:
-            return None
-        parts = (candidates[0].get("content") or {}).get("parts") or []
-        if not parts:
-            return None
-        text = parts[0].get("text")
-        if not text:
-            return None
-    except (AttributeError, IndexError, TypeError):
+    # A safety classifier can decline a request; the response is a normal 200
+    # with no usable content, so this has to be checked before reading it.
+    if getattr(message, "stop_reason", None) == "refusal":
+        details = getattr(message, "stop_details", None)
+        log.warning(
+            "screenshots: extraction refused (%s)",
+            getattr(details, "category", None) or "no category given",
+        )
+        return None
+    if getattr(message, "stop_reason", None) == "max_tokens":
+        log.warning("screenshots: extraction hit the token cap; treating as unreadable")
         return None
 
-    # Strip optional ```json / ``` fences.
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        # Drop the opening fence (handles ```json or bare ```) and the closing ```.
-        first_newline = stripped.find("\n")
-        if first_newline != -1:
-            stripped = stripped[first_newline + 1:]
-        else:
-            # No newline — fence with nothing after it.
-            return None
-        if stripped.rstrip().endswith("```"):
-            stripped = stripped.rstrip()[:-3]
-    stripped = stripped.strip()
+    text = next(
+        (b.text for b in (getattr(message, "content", None) or [])
+         if getattr(b, "type", None) == "text"),
+        None,
+    )
+    if not text:
+        return None
 
-    import json
     try:
-        parsed = json.loads(stripped)
+        parsed = json.loads(text)
     except (json.JSONDecodeError, ValueError):
+        log.warning("screenshots: extraction was not valid JSON")
         return None
     return parsed if isinstance(parsed, dict) else None
 
 
-def build_signal(extraction: dict, sha1_hex: str, filename: str) -> dict:
+def build_signal(
+    extraction: dict, sha1_hex: str, filename: str, image_name: str | None = None
+) -> dict:
     """Build a signal dict from a parsed extraction.
 
     Pure: plain dicts in and out (redaction is in-memory string work).
+
+    ``image_name`` is what the image was stored as. When it is given the signal
+    carries a media item pointing at it, so a reviewer can see the screenshot
+    the text was read out of and judge the extraction for themselves — the
+    text alone gives them no way to tell a good read from a bad one.
+
+    That URL is a path, not an absolute address: it resolves against the API
+    serving the signal, whether that is the UI's own origin through nginx or
+    the API's port directly.
     """
     platform = (extraction.get("platform") or "unknown").lower()
     text = redact_handles((extraction.get("text") or "").strip())
@@ -116,8 +173,16 @@ def build_signal(extraction: dict, sha1_hex: str, filename: str) -> dict:
         },
         "text": text,
         "external_id": sha1_hex,  # sha1 of the image bytes — resharing the same image is a no-op
+        # The screenshot is unredacted: whatever name and profile photo were on
+        # screen when it was taken are still in the picture, even though they
+        # have been stripped out of `text`. The interface blurs it until a
+        # reviewer chooses to look, and says why.
+        "media": (
+            [{"type": "image", "url": f"/screenshots/{image_name}"}] if image_name else []
+        ),
         "raw": {
             "screenshot": True,
+            "screenshot_unredacted": bool(image_name),
             "platform": platform,
             "author_type": extraction.get("author_type") or "unknown",
             "posted_time_text": extraction.get("posted_time_text"),
@@ -130,33 +195,39 @@ def build_signal(extraction: dict, sha1_hex: str, filename: str) -> dict:
 # --- network-exercising (tests monkeypatch this) ---------------------------
 
 def _extract(image_bytes: bytes, mime: str, api_key: str) -> dict | None:
-    """POST one image to the Gemini vision endpoint and parse the response.
+    """Send one image to Claude and return the extracted post, or ``None``.
 
-    Non-2xx or ``requests.RequestException`` → log a warning, return ``None``.
+    Any API error is logged and swallowed: a screenshot that cannot be read is
+    a screenshot to look at later, not a reason to stop the run.
     """
-    model = MODEL  # resolved at call time so tests can set the env first
+    client = anthropic.Anthropic(api_key=api_key)
     try:
-        r = requests.post(
-            API_URL.format(model=model) + f"?key={api_key}",
-            json={
-                "contents": [{"parts": [
-                    {"text": PROMPT},
-                    {"inline_data": {
-                        "mime_type": mime,
-                        "data": base64.b64encode(image_bytes).decode(),
-                    }},
-                ]}],
-                "generationConfig": {"response_mime_type": "application/json"},
+        message = client.messages.create(
+            model=MODEL,  # read at call time so tests can set the env first
+            max_tokens=MAX_TOKENS,
+            output_config={
+                "effort": EFFORT,
+                "format": {"type": "json_schema", "schema": EXTRACTION_SCHEMA},
             },
-            timeout=60,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": mime,
+                            "data": base64.b64encode(image_bytes).decode(),
+                        },
+                    },
+                    {"type": "text", "text": PROMPT},
+                ],
+            }],
         )
-    except requests.RequestException as exc:
-        log.warning("screenshot vision request failed: %s", exc)
+    except anthropic.APIError as exc:
+        log.warning("screenshots: vision request failed: %s", exc)
         return None
-    if not (200 <= r.status_code < 300):
-        log.warning("screenshot vision API returned %d", r.status_code)
-        return None
-    return parse_extraction(r.json())
+    return parse_extraction(message)
 
 
 # --- collect ---------------------------------------------------------------
@@ -171,60 +242,69 @@ _MIME_BY_EXT = {
 
 def collect() -> list[dict]:
     """Scan the configured inbox for shared screenshots, extract, and return
-    signals. Files are moved to ``processed/``, ``skipped/`` or ``failed/``
-    subdirectories. A per-file exception is caught; the file is left in place
-    and the loop continues.
+    signals.
+
+    Each file is moved out of ``inbox/`` as it is dealt with — into
+    ``processed/``, ``skipped/`` (not a social post) or ``failed/`` — so what
+    remains in the inbox is exactly what has not been looked at. A processed
+    image is stored under its own sha1 and stays there: it is the evidence
+    behind the signal, and the review interface loads it back.
+
+    A per-file exception is caught; the file is left where it is and the loop
+    continues.
     """
-    inbox = Path(os.getenv("SCREENSHOT_INBOX", "/inbox"))
-    if not inbox.is_dir():
-        log.debug("screenshot inbox %s does not exist", inbox)
+    inbox = store.open_inbox()
+    names = inbox.pending(EXTENSIONS, MAX_PER_RUN)
+    if not names:
         return []
 
-    candidates = sorted(
-        p for p in inbox.iterdir()
-        if p.is_file() and p.suffix.lower() in EXTENSIONS
-    )
-    if not candidates:
-        return []
-    candidates = candidates[:MAX_PER_RUN]
-
-    api_key = os.getenv("GEMINI_API_KEY", "")
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
     if not api_key:
         log.warning(
-            "screenshots: %d file(s) in inbox but GEMINI_API_KEY is unset; "
-            "idling until a key is provided", len(candidates),
+            "screenshots: %d file(s) waiting but ANTHROPIC_API_KEY is unset; "
+            "idling until a key is provided", len(names),
         )
         return []
 
     signals: list[dict] = []
-    for path in candidates:
+    for name in names:
         try:
-            image_bytes = path.read_bytes()
+            image_bytes = inbox.read(name)
             sha1_hex = hashlib.sha1(image_bytes).hexdigest()
-            extraction = _extract(image_bytes, _MIME_BY_EXT.get(path.suffix.lower(), "image/png"), api_key)
+            suffix = Path(name).suffix.lower()
+            extraction = _extract(image_bytes, _MIME_BY_EXT.get(suffix, "image/png"), api_key)
 
             if extraction is None:
-                dest = _move(path, inbox / "failed")
+                folder, stored = store.FAILED, inbox.move(name, store.FAILED, store.safe_name(name))
             elif not extraction.get("is_social_post") or not (extraction.get("text") or "").strip():
-                dest = _move(path, inbox / "skipped")
+                folder, stored = store.SKIPPED, inbox.move(name, store.SKIPPED, store.safe_name(name))
             else:
-                signals.append(build_signal(extraction, sha1_hex, path.name))
-                dest = _move(path, inbox / "processed")
-            if dest:
-                log.info("screenshots: %s → %s", path.name, dest.name)
+                # Stored under the content hash, which is also the signal's
+                # external_id — so the same screenshot shared twice is one
+                # signal pointing at one image, not two of each.
+                folder = store.PROCESSED
+                stored = inbox.move(name, store.PROCESSED, f"{sha1_hex}{suffix}")
+                signals.append(build_signal(extraction, sha1_hex, name, image_name=stored))
+            if stored:
+                log.info("screenshots: %s → %s/%s", name, folder, stored)
         except Exception as exc:  # noqa: BLE001 — one file must not stop the loop
-            log.warning("screenshots: failed on %s: %s; left in place", path.name, exc)
+            log.warning("screenshots: failed on %s: %s; left in place", name, exc)
             continue
 
-    log.info("screenshots: %d signal(s) from %d file(s)", len(signals), len(candidates))
+    log.info("screenshots: %d signal(s) from %d file(s)", len(signals), len(names))
     return signals
 
 
-def _move(path: Path, dest_dir: Path) -> Path | None:
-    """Create ``dest_dir`` if needed and rename ``path`` into it."""
-    try:
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        return path.rename(dest_dir / path.name)
-    except OSError as exc:  # pragma: no cover — guarded by caller
-        log.warning("screenshots: could not move %s to %s: %s", path.name, dest_dir.name, exc)
-        return None
+def describe() -> dict:
+    """What this collector is reading, for the pipeline dashboard.
+
+    Deliberately no credential: the inbox location is the account and container
+    name, never the SAS token that opens it.
+    """
+    inbox = store.open_inbox()
+    return {
+        "storage": inbox.kind,
+        "inbox": inbox.location,
+        "vision_model": MODEL,
+        "configured": bool(os.getenv("ANTHROPIC_API_KEY", "")),
+    }

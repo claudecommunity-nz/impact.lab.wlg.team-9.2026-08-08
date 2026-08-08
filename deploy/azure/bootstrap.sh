@@ -251,6 +251,29 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# 2c. Blob container for the screenshot inbox
+# --------------------------------------------------------------------------
+# Where community-shared screenshots land, and where the processed ones stay
+# as the evidence behind each signal. A blob container rather than another
+# file share, because the review page has to load these images back over
+# HTTP, and SMB gives you nothing a browser can read.
+#
+# Private: the container is opened by a time-limited SAS held server-side,
+# never by a public URL. These are unredacted screenshots of other people's
+# posts — nothing about them should be world-readable.
+say "Blob container 'screenshots' (screenshot intake)"
+if az storage container exists --name screenshots \
+     --account-name "$STORAGE_ACCOUNT" --account-key "$STORAGE_KEY" \
+     --query exists -o tsv 2>/dev/null | grep -q true; then
+  note "already exists"
+else
+  az storage container create --name screenshots \
+    --account-name "$STORAGE_ACCOUNT" --account-key "$STORAGE_KEY" \
+    --public-access off --output none
+  note "created (private)"
+fi
+
+# --------------------------------------------------------------------------
 # 3. MongoDB Atlas connection string
 # --------------------------------------------------------------------------
 # The database is a free Atlas M0 cluster rather than anything in Azure. It is
@@ -508,6 +531,46 @@ for attempt in 1 2 3 4 5 6; do
   note "waiting for the role assignment to reach the data plane (attempt $attempt)"
   sleep 10
 done
+
+# --------------------------------------------------------------------------
+# 5b. Vision key for the screenshot intake
+# --------------------------------------------------------------------------
+# Optional, and in the vault for the same reason as the connection string: a
+# repo secret is readable by a workflow on any branch, so anyone with push
+# access could print it. Reaching the vault takes a merge to main.
+#
+# Skipping this is a supported outcome — the deploy renders the screenshot
+# collector out of the container group entirely, and everything else runs.
+say "Vision key for the screenshot intake (Anthropic API key)"
+
+if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+  if EXISTING_KEY="$(az keyvault secret show --vault-name "$KEY_VAULT_NAME" \
+       --name anthropic-api-key --query value -o tsv 2>/dev/null)" && [[ -n "$EXISTING_KEY" ]]; then
+    ANTHROPIC_API_KEY="$EXISTING_KEY"
+    note "reusing the key already in $KEY_VAULT_NAME"
+  fi
+fi
+
+if [[ -z "${ANTHROPIC_API_KEY:-}" && "$NONINTERACTIVE" != "1" ]]; then
+  cat <<'EOF'
+
+  From the Anthropic Console: platform.claude.com -> API keys.
+  Press Enter to skip — the screenshot intake will simply not be deployed.
+
+EOF
+  read -r -s -p "  Paste it (hidden, optional): " ANTHROPIC_API_KEY || ANTHROPIC_API_KEY=""
+  echo
+fi
+
+if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+  az keyvault secret set --vault-name "$KEY_VAULT_NAME" \
+    --name anthropic-api-key --value "$ANTHROPIC_API_KEY" --output none
+  note "stored as 'anthropic-api-key'"
+else
+  warn "no key given — the screenshot intake will not be deployed"
+  warn "add one later with:  ./deploy/azure/deploy.sh secret anthropic-api-key"
+fi
+unset ANTHROPIC_API_KEY
 
 # --------------------------------------------------------------------------
 # 6. Save state and hand the values to GitHub
