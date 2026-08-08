@@ -39,6 +39,8 @@ source "$ENV_FILE"
 # Say so plainly rather than failing later on an empty --vault-name.
 [[ -n "${KEY_VAULT_NAME:-}" ]] \
   || fail "$ENV_FILE predates the Key Vault change — re-run ./deploy/azure/bootstrap.sh to add it"
+[[ -n "${STORAGE_ACCOUNT:-}" ]] \
+  || fail "$ENV_FILE predates the HTTPS change — re-run ./deploy/azure/bootstrap.sh to add the certificate storage"
 SECRET_NAME="${SECRET_NAME:-mongo-uri}"
 
 TAG="${TAG:-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo latest)}"
@@ -74,7 +76,11 @@ cmd_deploy() {
       --query value -o tsv 2>/dev/null)" \
       || fail "could not read '$SECRET_NAME' from Key Vault '$KEY_VAULT_NAME'. You need the 'Key Vault Secrets User' role (or Officer) on the vault."
   fi
-  export ACR_SERVER ACR_USERNAME ACR_PASSWORD MONGO_URI
+  STORAGE_KEY="$(az storage account keys list \
+    --account-name "$STORAGE_ACCOUNT" --resource-group "$RESOURCE_GROUP" \
+    --query '[0].value' -o tsv 2>/dev/null)" \
+    || fail "could not read the storage key for '$STORAGE_ACCOUNT' — re-run bootstrap.sh"
+  export ACR_SERVER ACR_USERNAME ACR_PASSWORD MONGO_URI STORAGE_ACCOUNT STORAGE_KEY
 
   # The rendered file carries the registry password and the connection string
   # in plaintext, so it is created 0600 in a temp dir and removed on the way
@@ -113,11 +119,14 @@ cmd_status() {
   [[ -n "$fqdn" ]] || return 0
   cat <<EOF
 
-  UI        http://$fqdn/
-  API docs  http://$fqdn:8000/docs
-  Stats     http://$fqdn:8000/stats
-  Signals   http://$fqdn:8000/signals.geojson
-  Groups    http://$fqdn:8000/clusters.geojson
+  UI        https://$fqdn/
+  Signals   https://$fqdn/api/signals.geojson
+  Groups    https://$fqdn/api/clusters.geojson
+  API docs  https://$fqdn/api/docs
+
+  Plain HTTP, still live in case TLS is having a bad day:
+  UI        http://$fqdn:8080/
+  API       http://$fqdn:8000/
 
 EOF
 }

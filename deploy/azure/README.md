@@ -156,6 +156,39 @@ the connection string in plaintext. It is written to a `0600` file in a temp
 directory and deleted when the script exits, including on interrupt — it is no
 longer left in the repo as `aci.generated.yaml`.
 
+## HTTPS
+
+The site is served over HTTPS by a Caddy container in the group, which obtains
+and renews the certificate itself over ACME. No key material in this repo,
+nothing to remember to rotate, and no custom domain needed.
+
+That last part works because **`*.azurecontainer.io` is on the Public Suffix
+List**. That makes the group's full hostname its own registered domain as far
+as Let's Encrypt is concerned, so it gets its own rate-limit budget instead of
+sharing one with every Azure Container Instance in the world. Had it not been
+listed, this would have needed a domain you own.
+
+| Port | What | Why it's open |
+|---|---|---|
+| 443 | UI and API over HTTPS, via Caddy | the address to share |
+| 80 | Caddy | ACME HTTP-01 challenge, and redirects to 443 |
+| 8080 | nginx directly, plain HTTP | fallback if TLS is unhappy |
+| 8000 | API directly, plain HTTP | direct feed access, unchanged |
+
+Ports 8080 and 8000 stay open deliberately. Certificate issuance depends on
+Let's Encrypt reaching us and on rate limits nobody here controls, and a demo
+that is entirely down because ACME had a bad afternoon is a worse outcome than
+one with a plain-HTTP fallback. The deploy smoke test treats TLS separately for
+the same reason: a certificate problem is reported as a warning against a
+working app, not as a failed deployment.
+
+**Certificates persist across deploys.** Every deploy deletes and recreates the
+container group, and Let's Encrypt allows five duplicate certificates per week
+— a day of iterating would exhaust that and leave the site on a rate-limit
+error. Caddy's `/data` is therefore an Azure Files share. Unlike the database,
+this is a fine use of Azure Files: Caddy wants an ordinary filesystem, not the
+locking semantics SMB cannot provide.
+
 ## What runs where
 
 | | compose | Azure |
@@ -172,7 +205,8 @@ always deletes and recreates the group — keeps the data.
 
 | | |
 |---|---|
-| Container group (1.75 vCPU, 3.5 GB) | ~US$0.05/hr, ~$1.20/day, billed per second while running |
+| Container group (2.0 vCPU, 4.0 GB) | ~US$0.06/hr, ~$1.40/day, billed per second while running |
+| Storage account (1 GiB file share) | pennies per month |
 | MongoDB Atlas M0 | $0, and not on your Azure bill at all |
 | Container registry (Basic) | ~US$0.17/day |
 | Key Vault (standard) | ~US$0.03 per 10,000 operations — a few reads a day rounds to nothing |

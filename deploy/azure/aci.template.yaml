@@ -30,10 +30,24 @@ properties:
     dnsNameLabel: __DNS_LABEL__
     ports:
       - protocol: tcp
-        port: 80      # UI
+        port: 443     # UI over HTTPS, via Caddy
+      - protocol: tcp
+        port: 80      # Caddy: ACME HTTP-01 challenge, and redirect to 443
+      - protocol: tcp
+        port: 8080    # nginx direct, plain HTTP — deliberate demo insurance.
+                      # If ACME ever fails there is still a working URL rather
+                      # than a site that is entirely down four minutes before
+                      # a demo.
       - protocol: tcp
         port: 8000    # API — exposed so the shared operating picture can read
                       # /signals.geojson and /clusters.geojson directly
+
+  volumes:
+    - name: caddy-data
+      azureFile:
+        shareName: caddy-data
+        storageAccountName: __STORAGE_ACCOUNT__
+        storageAccountKey: __STORAGE_KEY__
 
   containers:
     # --- ingestion API -----------------------------------------------------
@@ -110,13 +124,53 @@ properties:
       properties:
         image: __ACR_SERVER__/team9-ui:__TAG__
         ports:
-          - port: 80
+          - port: 8080
         environmentVariables:
           # Same namespace, so the nginx proxy target is loopback here.
           - name: API_UPSTREAM
             value: 127.0.0.1:8000
+          - name: UI_LISTEN_PORT
+            value: "8080"
           - name: NGINX_ENVSUBST_FILTER
-            value: API_UPSTREAM
+            value: (API_UPSTREAM|UI_LISTEN_PORT)
+        resources:
+          requests:
+            cpu: 0.25
+            memoryInGB: 0.5
+
+    # --- TLS ---------------------------------------------------------------
+    # Caddy terminates HTTPS and proxies to nginx. It obtains and renews the
+    # certificate itself over ACME, with no key material in this repo and
+    # nothing to remember to rotate.
+    #
+    # This works without a custom domain because *.azurecontainer.io is on the
+    # Public Suffix List, which makes the full hostname below its own
+    # registered domain as far as Let's Encrypt is concerned — so it gets its
+    # own rate-limit budget rather than sharing one with every other Azure
+    # Container Instance in the world.
+    #
+    # The stock image with a command override, rather than a fifth image to
+    # build: `caddy reverse-proxy` turns on automatic HTTPS by itself.
+    - name: caddy
+      properties:
+        image: caddy:2.8-alpine
+        command:
+          - caddy
+          - reverse-proxy
+          - --from
+          - __FQDN__
+          - --to
+          - 127.0.0.1:8080
+        ports:
+          - port: 443
+          - port: 80
+        volumeMounts:
+          # Certificates persist across deploys. Every deploy deletes and
+          # recreates this group, and Let's Encrypt allows only 5 duplicate
+          # certificates per week — without this, a day of iterating would
+          # exhaust that and leave the demo on a rate-limit error.
+          - name: caddy-data
+            mountPath: /data
         resources:
           requests:
             cpu: 0.25

@@ -163,6 +163,9 @@ if [[ -z "${ACR_NAME:-}" ]]; then
   # also sidesteps Key Vault soft-delete: a deleted vault holds its name for 90
   # days, so a re-bootstrap with a fixed name would collide with its own ghost.
   KEY_VAULT_NAME="team9-kv-${SUFFIX}"
+  # Storage account names: globally unique, 3-24 chars, lowercase alphanumeric
+  # only — no hyphens, which is why this one does not match the pattern above.
+  STORAGE_ACCOUNT="team9st${SUFFIX}"
 fi
 
 # Written now, not at the end. Saving names only once everything succeeded is
@@ -177,6 +180,7 @@ GROUP_NAME=$GROUP_NAME
 DNS_LABEL=$DNS_LABEL
 KEY_VAULT_NAME=$KEY_VAULT_NAME
 SECRET_NAME=$SECRET_NAME
+STORAGE_ACCOUNT=$STORAGE_ACCOUNT
 LOCATION=$LOCATION
 EOF
 }
@@ -196,6 +200,47 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# 2b. Storage for Caddy's TLS certificates
+# --------------------------------------------------------------------------
+# Every deploy deletes and recreates the container group, so without somewhere
+# durable to keep them Caddy would request a fresh certificate each time. Let's
+# Encrypt permits five duplicate certificates per week; a day of iterating
+# would burn through that and leave the demo showing a rate-limit error.
+#
+# Unlike the database, this is a genuinely fine use of Azure Files: Caddy wants
+# an ordinary filesystem, not the locking semantics SMB cannot provide.
+say "Storage account $STORAGE_ACCOUNT (TLS certificate persistence)"
+if az storage account show --name "$STORAGE_ACCOUNT" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
+  note "already exists"
+else
+  az storage account create \
+    --name "$STORAGE_ACCOUNT" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$LOCATION" \
+    --sku Standard_LRS \
+    --kind StorageV2 \
+    --min-tls-version TLS1_2 \
+    --allow-blob-public-access false \
+    --output none
+  note "created"
+fi
+
+STORAGE_KEY="$(az storage account keys list \
+  --account-name "$STORAGE_ACCOUNT" --resource-group "$RESOURCE_GROUP" \
+  --query '[0].value' -o tsv)"
+
+if az storage share exists --name caddy-data \
+     --account-name "$STORAGE_ACCOUNT" --account-key "$STORAGE_KEY" \
+     --query exists -o tsv 2>/dev/null | grep -q true; then
+  note "file share 'caddy-data' already exists"
+else
+  az storage share create --name caddy-data \
+    --account-name "$STORAGE_ACCOUNT" --account-key "$STORAGE_KEY" \
+    --quota 1 --output none
+  note "file share 'caddy-data' created (1 GiB)"
+fi
+
+# --------------------------------------------------------------------------
 # 3. MongoDB Atlas connection string
 # --------------------------------------------------------------------------
 # The database is a free Atlas M0 cluster rather than anything in Azure. It is
@@ -204,6 +249,18 @@ fi
 # Creating the cluster is a web signup, so it is the one thing here that cannot
 # be scripted; this step collects the result and checks it works.
 say "MongoDB Atlas connection string"
+
+# Already in the vault from a previous run? Reuse it. Re-running this script is
+# a normal thing to do — adding a resource, repairing a role assignment — and
+# it should not mean hunting down the connection string again every time.
+if [[ -z "${MONGO_URI:-}" && -n "${KEY_VAULT_NAME:-}" ]]; then
+  if EXISTING="$(az keyvault secret show --vault-name "$KEY_VAULT_NAME" \
+       --name "$SECRET_NAME" --query value -o tsv 2>/dev/null)" && [[ -n "$EXISTING" ]]; then
+    MONGO_URI="$EXISTING"
+    REUSED_SECRET=1
+    note "reusing the connection string already in $KEY_VAULT_NAME"
+  fi
+fi
 
 if [[ -z "${MONGO_URI:-}" ]]; then
   cat <<'EOF'
@@ -230,7 +287,9 @@ fi
 # Verified now rather than at deploy time. A wrong password or a missing
 # network-access entry produces an identical symptom half an hour later —
 # containers that start, then sit there failing to reach the database.
-if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+if [[ "${REUSED_SECRET:-}" == "1" ]]; then
+  note "skipping the connection test — this string was already working"
+elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   note "testing the connection"
   if docker run --rm mongo:7 mongosh "$MONGO_URI" --quiet \
        --eval 'db.adminCommand({ping:1}).ok' 2>/dev/null | grep -q 1; then
@@ -457,6 +516,7 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   gh variable set ACI_DNS_LABEL        --repo "$REPO_SLUG" --body "$DNS_LABEL"      >/dev/null
   gh variable set AZURE_KEY_VAULT_NAME --repo "$REPO_SLUG" --body "$KEY_VAULT_NAME" >/dev/null
   gh variable set MONGO_SECRET_NAME    --repo "$REPO_SLUG" --body "$SECRET_NAME"    >/dev/null
+  gh variable set AZURE_STORAGE_ACCOUNT --repo "$REPO_SLUG" --body "$STORAGE_ACCOUNT" >/dev/null
   note "secrets and variables set on $REPO_SLUG"
 
   # Left over from the previous design, where the connection string was a repo
@@ -482,6 +542,7 @@ else
     ACI_DNS_LABEL          $DNS_LABEL
     AZURE_KEY_VAULT_NAME   $KEY_VAULT_NAME
     MONGO_SECRET_NAME      $SECRET_NAME
+    AZURE_STORAGE_ACCOUNT  $STORAGE_ACCOUNT
 
   There is deliberately no MONGO_URI secret — delete it if one is still there.
 EOF
