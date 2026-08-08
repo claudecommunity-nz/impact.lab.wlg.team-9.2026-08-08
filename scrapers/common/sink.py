@@ -55,6 +55,24 @@ def post_signals(signals: list[dict]) -> dict:
     return totals
 
 
+def report_run(run: dict) -> None:
+    """Tell the API how a collector run went, for the pipeline dashboard.
+
+    Best-effort and deliberately quiet: telemetry failing is not a reason for a
+    scraper to stop scraping, and a noisy warning every cycle would bury the
+    real logs.
+    """
+    try:
+        requests.post(
+            f"{INGESTION_URL}/runs",
+            data=json.dumps(run, default=_encode),
+            headers={"Content-Type": "application/json"},
+            timeout=10,
+        ).raise_for_status()
+    except requests.RequestException as exc:
+        log.debug("could not report run for %s: %s", run.get("component"), exc)
+
+
 def wait_for_api(timeout: int = 120) -> bool:
     """Block until the ingestion API answers, so a cold start isn't a crash loop."""
     deadline = time.time() + timeout

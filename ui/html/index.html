@@ -119,6 +119,122 @@ h1 span { font-weight: 400; color: var(--text-muted); }
 }
 #refresh-note { margin-left: auto; color: var(--text-muted); font-size: 12px; }
 
+/* --- tabs --------------------------------------------------------------- */
+.tabs {
+  display: flex; gap: 2px; padding: 0 16px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+}
+.tab {
+  font: inherit; font-size: 13px; font-weight: 550;
+  background: none; border: 0; border-bottom: 2px solid transparent;
+  padding: 8px 12px; margin-bottom: -1px;
+  color: var(--text-secondary); cursor: pointer;
+  display: flex; align-items: center; gap: 6px;
+}
+.tab:hover { color: var(--text-primary); }
+.tab.active { color: var(--text-primary); border-bottom-color: var(--meter-fill); }
+.tab-badge:not(:empty) {
+  font-size: 10.5px; font-weight: 700; line-height: 1;
+  padding: 2px 5px; border-radius: 999px;
+  background: var(--status-critical); color: #fff;
+}
+
+/* Views swap in place. Only one is in the layout at a time, so the map does
+   not keep rendering underneath a table it cannot be seen through. */
+.view { display: none; flex: 1; min-height: 0; }
+.view.active { display: flex; }
+[data-view-only]{ display: none; }
+[data-view-only].active { display: flex; }
+.view-inner { flex: 1; overflow-y: auto; padding: 16px; min-width: 0; }
+.view-intro {
+  margin: 0 0 14px; max-width: 70ch;
+  font-size: 13px; color: var(--text-secondary);
+}
+
+/* --- pipeline ----------------------------------------------------------- */
+.pipeline-group { margin-bottom: 22px; }
+.pipeline-grid {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+}
+.pcard {
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 12px; background: var(--surface-1);
+}
+.pcard.error   { border-left: 4px solid var(--status-critical); }
+.pcard.stale   { border-left: 4px solid var(--status-warning); }
+.pcard.ok      { border-left: 4px solid var(--status-good); }
+.pcard-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; }
+.pcard-name { font-weight: 650; font-size: 14px; }
+.pcard-when { margin-left: auto; font-size: 12px; color: var(--text-secondary); }
+.pcard-desc { font-size: 12.5px; color: var(--text-secondary); margin-bottom: 8px; }
+.pcard-stats {
+  display: flex; flex-wrap: wrap; gap: 4px 14px;
+  font-size: 12px; color: var(--text-secondary);
+  padding-top: 8px; border-top: 1px solid var(--gridline);
+}
+.pcard-stats b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.pcard-error {
+  font-size: 12px; color: var(--status-critical);
+  margin-top: 8px; font-family: ui-monospace, monospace; word-break: break-word;
+}
+
+.targets { margin-top: 10px; border-top: 1px solid var(--gridline); }
+.target {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 12px; padding: 5px 0; border-bottom: 1px solid var(--gridline);
+}
+.target:last-child { border-bottom: 0; }
+.target-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.target-detail { color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.target a { color: inherit; text-decoration: none; }
+.target a:hover { text-decoration: underline; }
+
+/* Status is never colour alone — each dot sits beside its own word. */
+.status-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.s-ok      { background: var(--status-good); }
+.s-empty   { background: var(--text-muted); }
+.s-error   { background: var(--status-critical); }
+.s-stale   { background: var(--status-warning); }
+.s-skipped { background: var(--text-muted); }
+.status-word { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary); }
+
+/* --- raw data table ----------------------------------------------------- */
+.table-meta {
+  display: flex; align-items: center; gap: 12px;
+  font-size: 12.5px; color: var(--text-secondary); margin: 4px 0 8px;
+}
+.pager { margin-left: auto; display: flex; gap: 6px; }
+.pgbtn {
+  font: inherit; font-size: 12.5px; padding: 3px 10px;
+  border: 1px solid var(--gridline); border-radius: 4px;
+  background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+}
+.pgbtn:disabled { opacity: 0.4; cursor: default; }
+
+/* Wide content scrolls inside its own box; the page never scrolls sideways. */
+.table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; }
+.data-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.data-table th {
+  text-align: left; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-muted); font-weight: 600;
+  padding: 8px 10px; border-bottom: 1px solid var(--gridline);
+  position: sticky; top: 0; background: var(--surface-1);
+}
+.data-table td { padding: 8px 10px; border-bottom: 1px solid var(--gridline); vertical-align: top; }
+.data-table tr:hover td { background: var(--surface-2); }
+.data-table .col-when { white-space: nowrap; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.data-table .col-text { min-width: 280px; max-width: 520px; }
+.data-table .col-src  { white-space: nowrap; }
+.raw-json {
+  margin: 0; padding: 10px; font-size: 11.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--surface-2); border-radius: 4px;
+  overflow-x: auto; white-space: pre; max-height: 340px;
+}
+.linkout { color: var(--meter-fill); text-decoration: none; white-space: nowrap; }
+
 /* --- layout ------------------------------------------------------------- */
 main { flex: 1; display: flex; min-height: 0; }
 #map { flex: 1; min-width: 0; }
@@ -253,7 +369,13 @@ aside {
   </div>
 </header>
 
-<div class="filters">
+<nav class="tabs" role="tablist">
+  <button class="tab active" data-view="map"      role="tab">Map</button>
+  <button class="tab"        data-view="pipeline" role="tab">Pipeline<span class="tab-badge" id="tab-pipeline-badge"></span></button>
+  <button class="tab"        data-view="data"     role="tab">Raw data</button>
+</nav>
+
+<div class="filters" data-view-only="map">
   <label>Time
     <select id="f-since">
       <option value="6h">Last 6 hours</option>
@@ -276,7 +398,69 @@ aside {
   <span id="refresh-note">—</span>
 </div>
 
-<main>
+<!-- ===================== PIPELINE ===================== -->
+<section id="view-pipeline" class="view">
+  <div class="view-inner">
+    <p class="view-intro">
+      What is collecting, what it is polling, and when it last did so. A source
+      that has quietly stopped returning anything looks exactly like a quiet
+      source until you can see the last run time — which is the reason this
+      page exists.
+    </p>
+    <div id="pipeline-groups"></div>
+  </div>
+</section>
+
+<!-- ===================== RAW DATA ===================== -->
+<section id="view-data" class="view">
+  <div class="view-inner">
+    <div class="filters" style="padding-left:0; padding-right:0; border:0">
+      <label>Search
+        <input type="search" id="d-q" placeholder="text or title…" style="min-width:200px">
+      </label>
+      <label>Source
+        <select id="d-source"><option value="">All sources</option></select>
+      </label>
+      <label>Issue
+        <select id="d-issue"><option value="">All types</option></select>
+      </label>
+      <label>Time
+        <select id="d-since">
+          <option value="">All time</option>
+          <option value="6h">Last 6 hours</option>
+          <option value="24h">Last 24 hours</option>
+          <option value="7d" selected>Last 7 days</option>
+        </select>
+      </label>
+      <label title="Signals no place name could be found for. These never appear on the map.">
+        <input type="checkbox" id="d-unlocated"> Unmapped only
+      </label>
+    </div>
+
+    <div class="table-meta">
+      <span id="d-count">—</span>
+      <span class="pager">
+        <button id="d-prev" class="pgbtn">‹ Newer</button>
+        <button id="d-next" class="pgbtn">Older ›</button>
+      </span>
+    </div>
+
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>When</th><th>Source</th><th>Issue</th><th>Place</th>
+            <th>Text</th><th>Grade</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="d-rows"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== MAP ===================== -->
+<main id="view-map" class="view active">
   <div id="map"></div>
   <aside>
     <div id="list-view">
@@ -638,9 +822,286 @@ document.getElementById("back").addEventListener("click", () => {
   document.getElementById(id).addEventListener("change", refresh)
 );
 
-// Data loading does not wait on the map.
-refresh();
-setInterval(refresh, 30000);
+// --- view switching --------------------------------------------------------
+
+const VIEWS = ["map", "pipeline", "data"];
+
+function switchView(name, pushHash = true) {
+  if (!VIEWS.includes(name)) name = "map";
+  state.view = name;
+  // In the URL so a view can be linked to, survives a reload, and the back
+  // button does what it looks like it should.
+  if (pushHash && location.hash.slice(1) !== name) location.hash = name;
+  VIEWS.forEach((v) =>
+    document.getElementById(`view-${v}`).classList.toggle("active", v === name)
+  );
+  document.querySelectorAll(".tab").forEach((t) =>
+    t.classList.toggle("active", t.dataset.view === name)
+  );
+  document.querySelectorAll("[data-view-only]").forEach((el) =>
+    el.classList.toggle("active", el.dataset.viewOnly === name)
+  );
+  // MapLibre sizes its canvas to the container. Coming back to a tab that was
+  // display:none leaves it at the wrong size until told otherwise.
+  if (name === "map" && map) requestAnimationFrame(() => map.resize());
+  tick();
+}
+
+document.querySelectorAll(".tab").forEach((t) =>
+  t.addEventListener("click", () => switchView(t.dataset.view))
+);
+
+// --- pipeline view ---------------------------------------------------------
+
+function statusOf(c) {
+  if (c.status === "error") return "error";
+  if (c.stale) return "stale";
+  return c.status || "ok";
+}
+
+function pipelineCard(c) {
+  const st = statusOf(c);
+  const targets = c.targets || [];
+  const result = c.result || {};
+  const describes = c.describes || {};
+
+  // Jobs return a mix of counts and breakdowns (classify returns by_type, a
+  // map of issue type to count). Scalars go on the stats row; a breakdown
+  // becomes its own line rather than rendering as [object Object].
+  const scalars = Object.entries(result).filter(([, v]) => v === null || typeof v !== "object");
+  const breakdowns = Object.entries(result).filter(([, v]) => v && typeof v === "object");
+
+  const resultBits = scalars
+    .map(([k, v]) => `<span>${k.replace(/_/g, " ")} <b>${v}</b></span>`)
+    .join("");
+
+  const breakdownBits = breakdowns
+    .map(([k, v]) => {
+      const parts = Object.entries(v)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 6)
+        .map(([kk, vv]) => `${label(kk)} <b>${vv}</b>`)
+        .join(" · ");
+      return parts
+        ? `<div class="pcard-stats" style="border:0; padding-top:4px">
+             <span>${k.replace(/_/g, " ")}: ${parts}</span>
+           </div>`
+        : "";
+    })
+    .join("");
+
+  return `<div class="pcard ${st === "empty" ? "ok" : st}">
+    <div class="pcard-head">
+      <span class="status-dot s-${st}"></span>
+      <span class="pcard-name">${c.component}</span>
+      <span class="status-word">${st}</span>
+      <span class="pcard-when">${c.last_run_at ? timeAgo(c.last_run_at) : "never run"}</span>
+    </div>
+
+    <div class="pcard-desc">
+      ${describes.summary || c.description || (c.kind === "enrichment" ? "enrichment job" : "collector")}
+      ${c.interval_seconds ? ` · every ${c.interval_seconds}s` : ""}
+      ${c.version ? ` · <code>${c.version}</code>` : ""}
+    </div>
+
+    ${c.stale ? `<div class="pcard-desc" style="color:var(--status-warning)">
+        Has not run in ${timeAgo(c.last_run_at)} — expected every ${c.interval_seconds || "?"}s.
+      </div>` : ""}
+
+    ${targets.length ? `<div class="targets">${targets.map((t) => `
+      <div class="target">
+        <span class="status-dot s-${t.status}"></span>
+        <span class="target-name" title="${t.name}${t.url ? ` — ${t.url}` : ""}">${
+          t.url ? `<a href="${t.url}" target="_blank" rel="noopener noreferrer">${t.name}</a>` : t.name
+        }</span>
+        <span class="target-detail">${t.detail || t.status}</span>
+      </div>`).join("")}</div>` : ""}
+
+    ${c.error ? `<div class="pcard-error">${c.error}</div>` : ""}
+
+    <div class="pcard-stats">
+      ${resultBits}
+      ${c.duration_ms != null ? `<span>took <b>${c.duration_ms}ms</b></span>` : ""}
+      ${c.run_count != null ? `<span>runs <b>${c.run_count}</b></span>` : ""}
+    </div>
+    ${breakdownBits}
+  </div>`;
+}
+
+async function renderPipeline() {
+  const host = document.getElementById("pipeline-groups");
+  try {
+    const data = await getJSON("/pipeline");
+    const groups = [
+      ["Collectors", "scraper", "Poll a public source on a timer and post what they find."],
+      ["Enrichment", "enrichment", "Run over the stored signals, adding inference and grouping."],
+    ];
+
+    host.innerHTML = groups.map(([title, kind, blurb]) => {
+      const items = data.components.filter((c) => c.kind === kind);
+      if (!items.length) return "";
+      return `<div class="pipeline-group">
+        <div class="section-title">${title} — ${items.length}</div>
+        <p class="view-intro" style="margin:-4px 0 10px">${blurb}</p>
+        <div class="pipeline-grid">${items.map(pipelineCard).join("")}</div>
+      </div>`;
+    }).join("") || `<div class="empty">Nothing has reported a run yet.</div>`;
+
+    // Anything wrong gets a count on the tab, so it is visible from the map.
+    const bad = data.counts.erroring + data.counts.stale;
+    document.getElementById("tab-pipeline-badge").textContent = bad ? String(bad) : "";
+  } catch (err) {
+    host.innerHTML = `<div class="empty">Could not load the pipeline status (${err.message}).</div>`;
+  }
+}
+
+// --- raw data view ---------------------------------------------------------
+
+const dataState = { offset: 0, limit: 50, total: 0, rows: [] };
+
+function dataQuery() {
+  const p = new URLSearchParams();
+  const q = document.getElementById("d-q").value.trim();
+  const source = document.getElementById("d-source").value;
+  const issue = document.getElementById("d-issue").value;
+  const since = document.getElementById("d-since").value;
+  if (q) p.set("q", q);
+  if (source) p.set("source_type", source);
+  if (issue) p.set("issue_type", issue);
+  if (since) p.set("since", since);
+  if (document.getElementById("d-unlocated").checked) p.set("unlocated_only", "true");
+  p.set("limit", dataState.limit);
+  p.set("offset", dataState.offset);
+  return p.toString();
+}
+
+async function renderData() {
+  const body = document.getElementById("d-rows");
+  try {
+    const data = await getJSON(`/signals?${dataQuery()}`);
+    dataState.total = data.total;
+    dataState.rows = data.signals;
+
+    const from = data.total ? dataState.offset + 1 : 0;
+    const to = Math.min(dataState.offset + dataState.limit, data.total);
+    document.getElementById("d-count").textContent =
+      `${from}–${to} of ${data.total} signal${data.total === 1 ? "" : "s"}`;
+    document.getElementById("d-prev").disabled = dataState.offset === 0;
+    document.getElementById("d-next").disabled = to >= data.total;
+
+    if (!data.signals.length) {
+      body.innerHTML = `<tr><td colspan="7" class="empty">Nothing matches those filters.</td></tr>`;
+      return;
+    }
+
+    body.innerHTML = data.signals.map((s, i) => {
+      const cls = (s.enrichment && s.enrichment.classify) || {};
+      const geo = (s.enrichment && s.enrichment.geolocate) || {};
+      const adm = (s.enrichment && s.enrichment.admiralty) || {};
+      const synthetic = s.raw && s.raw.synthetic;
+      return `<tr>
+        <td class="col-when">${timeAgo(s.published_at || s.ingested_at)}</td>
+        <td class="col-src">${s.source.name}${
+          synthetic ? ` <span class="chip synthetic">sample</span>` : ""
+        }</td>
+        <td>${label(cls.issue_type)}</td>
+        <td>${geo.place || `<span style="color:var(--text-muted)">not placed</span>`}</td>
+        <td class="col-text">${(s.title ? `<strong>${s.title}</strong> — ` : "")}${
+          (s.text || "").slice(0, 220)
+        }${(s.text || "").length > 220 ? "…" : ""}</td>
+        <td>${adm.grade ? `<span class="chip grade">${adm.grade}</span>` : "—"}</td>
+        <td style="white-space:nowrap">
+          ${s.url ? `<a class="linkout" href="${s.url}" target="_blank" rel="noopener noreferrer">open ↗</a> ` : ""}
+          <button class="pgbtn" data-raw="${i}">JSON</button>
+        </td>
+      </tr>
+      <tr id="raw-${i}" style="display:none">
+        <td colspan="7"><pre class="raw-json">${
+          JSON.stringify(s, null, 2).replace(/</g, "&lt;")
+        }</pre></td>
+      </tr>`;
+    }).join("");
+
+    body.querySelectorAll("[data-raw]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const row = document.getElementById(`raw-${btn.dataset.raw}`);
+        row.style.display = row.style.display === "none" ? "table-row" : "none";
+      })
+    );
+  } catch (err) {
+    body.innerHTML = `<tr><td colspan="7" class="empty">Could not load signals (${err.message}).</td></tr>`;
+  }
+}
+
+function resetAndRenderData() {
+  dataState.offset = 0;
+  renderData();
+}
+
+["d-source", "d-issue", "d-since", "d-unlocated"].forEach((id) =>
+  document.getElementById(id).addEventListener("change", resetAndRenderData)
+);
+
+let searchTimer = null;
+document.getElementById("d-q").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(resetAndRenderData, 300);
+});
+
+document.getElementById("d-prev").addEventListener("click", () => {
+  dataState.offset = Math.max(0, dataState.offset - dataState.limit);
+  renderData();
+});
+document.getElementById("d-next").addEventListener("click", () => {
+  dataState.offset += dataState.limit;
+  renderData();
+});
+
+// --- refresh loop ----------------------------------------------------------
+
+function tick() {
+  // Header stats and the pipeline badge stay current in every view; the heavy
+  // per-view work only runs for the view actually on screen.
+  refresh();
+  if (state.view === "pipeline") renderPipeline();
+  if (state.view === "data") renderData();
+  if (state.view !== "pipeline") refreshPipelineBadge();
+}
+
+async function refreshPipelineBadge() {
+  try {
+    const d = await getJSON("/pipeline");
+    const bad = d.counts.erroring + d.counts.stale;
+    document.getElementById("tab-pipeline-badge").textContent = bad ? String(bad) : "";
+  } catch { /* the badge is a nicety; never let it break the page */ }
+}
+
+// Populate the data view's source filter from what is actually in the store,
+// so it never offers a source that produced nothing.
+async function populateDataFilters() {
+  try {
+    const stats = await getJSON("/stats");
+    const sel = document.getElementById("d-source");
+    const current = sel.value;
+    sel.length = 1;
+    for (const t of Object.keys(stats.signals.by_source_type || {}).sort()) sel.add(new Option(t, t));
+    sel.value = current;
+
+    const isel = document.getElementById("d-issue");
+    const icur = isel.value;
+    isel.length = 1;
+    for (const t of Object.keys(stats.signals.by_issue_type || {}).sort()) {
+      if (t && t !== "none") isel.add(new Option(label(t), t));
+    }
+    isel.value = icur;
+  } catch { /* filters degrade to "All"; the table still works */ }
+}
+
+window.addEventListener("hashchange", () => switchView(location.hash.slice(1), false));
+
+populateDataFilters();
+switchView(location.hash.slice(1) || "map", false);
+setInterval(tick, 30000);
 </script>
 </body>
 </html>

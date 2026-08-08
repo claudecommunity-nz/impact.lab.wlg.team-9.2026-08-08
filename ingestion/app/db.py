@@ -43,6 +43,9 @@ INDEXES = [
     ("clusters", [("cluster_id", ASCENDING)], True),
     ("clusters", [("source_count", DESCENDING)], False),
     ("clusters", [("last_seen", DESCENDING)], False),
+    # One document per pipeline component, upserted on every run — this is what
+    # the dashboard reads to say when each scraper and job last did anything.
+    ("component_runs", [("component", ASCENDING)], True),
 ]
 
 
