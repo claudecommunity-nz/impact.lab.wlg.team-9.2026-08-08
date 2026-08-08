@@ -82,8 +82,15 @@ properties:
         environmentVariables:
           - name: INGESTION_URL
             value: http://127.0.0.1:8000
+          # No `fixtures` here. The synthetic replay exists so the demo
+          # survives dead venue wifi, which is a local concern — in production
+          # it would put invented events on a map of real ones. Labelled all
+          # the way through, but still better absent.
+          #
+          # docker-compose.yml deliberately keeps it: offline development is
+          # exactly the case it was written for.
           - name: SOURCES
-            value: rss,geonet,mastodon,fixtures
+            value: rss,geonet,mastodon
           - name: SCRAPE_INTERVAL_SECONDS
             value: "600"
           - name: LOG_LEVEL
