@@ -136,3 +136,55 @@ def test_welectricity_signal_grading_A3():
     assert stamp["grade"] == "A3"
     assert stamp["source_reliability"] == "A"
     assert stamp["info_credibility"] == 3
+
+# --- field-verification grading (human confirmation path) ------------------
+
+def test_grade_cluster_field_verified_mastodon_multi_source():
+    """A field-verified cluster grades credibility 1 with a field-verified rationale."""
+    cluster = {
+        "cluster_id": "c-fv-1",
+        "corroboration": "multi_source",
+    }
+    members = [
+        {"signal_id": "s1", "source": {"type": "mastodon", "name": "Mastodon · mastodon.nz"}},
+    ]
+    stamp = grade_cluster(cluster, members, verification={"by_role": "council officer", "note": "checked"})
+    assert stamp["grade"] == "F1"
+    assert stamp["source_reliability"] == "F"
+    assert stamp["info_credibility"] == 1
+    assert stamp["meaning"].endswith("Confirmed by other sources")
+    assert any("field-verified" in r for r in stamp["rationale"])
+    assert stamp["note"] == "Field-verified by a person. Credibility 1 records that human confirmation, not an automated judgement."
+
+def test_grade_cluster_without_verification_unchanged():
+    """Without verification, the same mastodon multi_source cluster stays F2."""
+    cluster = {
+        "cluster_id": "c-fv-2",
+        "corroboration": "multi_source",
+    }
+    members = [
+        {"signal_id": "s1", "source": {"type": "mastodon", "name": "Mastodon · mastodon.nz"}},
+    ]
+    stamp = grade_cluster(cluster, members)
+    assert stamp["grade"] == "F2"
+    assert stamp["info_credibility"] == 2
+
+def test_exhaustive_credibility_guard_no_verification():
+    """Without verification, cluster credibility is still always in {2, 3, 6}."""
+    sources = [
+        {"type": "geonet", "name": "GeoNet (GNS Science)"},
+        {"type": "mastodon", "name": "Mastodon · mastodon.nz"},
+        {"type": "rss", "name": "MetService Severe Weather Warnings"},
+        {"type": "rss", "name": "RNZ National"},
+        {"type": "rss", "name": "Some Random Blog"},
+    ]
+    corrob_states = [None, "single_source", "two_sources", "multi_source"]
+    for src in sources:
+        for corrob in corrob_states:
+            cluster = {"cluster_id": "c-guard", "corroboration": corrob}
+            members = [{"signal_id": "s", "source": src}]
+            stamp = grade_cluster(cluster, members)
+            assert stamp["info_credibility"] in {2, 3, 6}, (
+                f"Failed for {src}, {corrob}: got {stamp['info_credibility']}"
+            )
+            assert stamp["info_credibility"] not in {1, 4, 5}

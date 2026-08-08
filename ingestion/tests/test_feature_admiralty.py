@@ -75,3 +75,37 @@ def test_cluster_feature_without_admiralty():
     assert props["admiralty_reliability"] is None
     assert props["admiralty_credibility"] is None
     assert props["admiralty_meaning"] is None
+
+
+def test_cluster_feature_verification_status_passthrough():
+    """cluster_feature passes verification_status and verified_note from the doc."""
+    doc = {
+        "cluster_id": "clust-v1",
+        "geo": {"type": "Point", "coordinates": [174.77, -41.28]},
+        "issue_type": "flood",
+        "source_count": 2,
+        "signal_count": 3,
+        "sources": ["RNZ", "GeoNet"],
+        "verification_status": "field_verified",
+        "verified_note": "checked at 14:02",
+    }
+    feature = cluster_feature(doc)
+    props = feature["properties"]
+    assert props["verification_status"] == "field_verified"
+    assert props["verified_note"] == "checked at 14:02"
+
+
+def test_cluster_feature_without_verification_defaults():
+    """cluster_feature defaults verification_status to 'unverified' and verified_note to None."""
+    doc = {
+        "cluster_id": "clust-v2",
+        "geo": {"type": "Point", "coordinates": [174.77, -41.28]},
+        "issue_type": "flood",
+        "source_count": 1,
+        "signal_count": 1,
+        "sources": ["Mastodon"],
+    }
+    feature = cluster_feature(doc)
+    props = feature["properties"]
+    assert props["verification_status"] == "unverified"
+    assert props["verified_note"] is None

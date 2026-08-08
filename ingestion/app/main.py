@@ -20,6 +20,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pymongo.errors import DuplicateKeyError, PyMongoError
+from pydantic import BaseModel
 
 from .db import ensure_indexes, get_db
 from .models import IngestResult, RunReport, SignalBatch, SignalIn
@@ -189,7 +190,8 @@ def cluster_feature(doc: dict) -> dict:
             "last_seen": _iso(doc.get("last_seen")),
             "location_confidence": doc.get("location_confidence") or 0.0,
             "place": doc.get("place"),
-            "verification_status": "unverified",
+            "verification_status": doc.get("verification_status") or "unverified",
+            "verified_note": doc.get("verified_note"),
             # Carried into the map layer so replayed demo data is labelled
             # everywhere it appears, not just in the list.
             "contains_synthetic": bool(doc.get("contains_synthetic")),
@@ -577,6 +579,53 @@ def pipeline():
             "stale": sum(1 for c in components if c["stale"]),
         },
     }
+
+
+class VerifyIn(BaseModel):
+    note: str = ""
+    by_role: str = "council officer"
+
+
+@app.post("/clusters/{cluster_id}/verify")
+def verify_cluster(cluster_id: str, body: VerifyIn):
+    """Record that a council officer field-verified a cluster (a human decision)."""
+    db = get_db()
+    cluster = db.clusters.find_one({"cluster_id": cluster_id})
+    if not cluster:
+        raise HTTPException(404, "no such cluster")
+    db.verifications.replace_one(
+        {"cluster_id": cluster_id},
+        {
+            "cluster_id": cluster_id,
+            "note": body.note,
+            "by_role": body.by_role,
+            "at": datetime.now(timezone.utc),
+        },
+        upsert=True,
+    )
+    # Stamp the cluster doc directly so the UI updates without waiting for the
+    # next enrichment tick. The corroborate rebuild wipes this; the admiralty
+    # tick re-joins it — that eventual consistency is fine and deliberate.
+    db.clusters.update_one(
+        {"cluster_id": cluster_id},
+        {"$set": {"verification_status": "field_verified", "verified_note": body.note}},
+    )
+    return {"cluster_id": cluster_id, "verification_status": "field_verified"}
+
+
+@app.delete("/clusters/{cluster_id}/verify")
+def unverify_cluster(cluster_id: str):
+    """Remove a field-verification record."""
+    db = get_db()
+    cluster = db.clusters.find_one({"cluster_id": cluster_id})
+    if not cluster:
+        raise HTTPException(404, "no such cluster")
+    db.verifications.delete_one({"cluster_id": cluster_id})
+    db.clusters.update_one(
+        {"cluster_id": cluster_id},
+        {"$unset": {"verification_status": "", "verified_note": ""}},
+    )
+    return {"cluster_id": cluster_id, "verification_status": "unverified"}
 
 
 @app.get("/stats")
