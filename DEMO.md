@@ -14,20 +14,23 @@ public information, and we are honest about how much to trust each one.**
 > **#4**. If either is still open at 16:00, cut that section and give the time
 > to the map — do not demo a branch you haven't run.
 
+> **Docker image builds do not work on the venue network — verified at 15:05.**
+> Do not plan on `--build` succeeding. See "If you must rebuild" below.
+
 Run this from the repo root, from whatever is on `main` at the time:
 
 ```bash
-docker compose up -d --build
-docker compose ps          # every service Up; mongo and api healthy
+docker compose up -d --no-build   # --no-build: reuse images already on disk
+docker compose ps                 # every service Up; mongo and api healthy
 open http://localhost:8080
 ```
 
 Checklist:
 
 - [ ] **Docker daemon is actually running** (`colima start` if not — it takes ~90s).
-      If image builds fail with `DeadlineExceeded: context deadline exceeded`,
-      prefix with `DOCKER_BUILDKIT=0` — the venue network makes BuildKit's
-      registry metadata lookup time out even though the registry is reachable.
+- [ ] **Don't run `--build` unless you have to.** Confirm what's actually up with
+      `docker compose ps` and check the scraper logs name the feeds you expect to
+      demo — a stale image looks identical to a fresh one until you read the logs.
 - [ ] `WELECTRICITY_INCLUDE_CLOSED=1` in `.env` if there are no live outages,
       so the outage lane has something to show.
 - [ ] One social-post screenshot staged on the desktop, ready to drag into
@@ -37,6 +40,27 @@ Checklist:
       map. Anything replayed is labelled `contains sample data` in the UI.
 - [ ] Check the legend renders in the room's lighting; dark mode is supported.
 - [ ] Have `http://localhost:8000/signals.geojson` open in a second tab.
+
+### If you must rebuild
+
+Every route was tried at ~15:00 and all of them hang indefinitely:
+
+| Attempt | Result |
+|---|---|
+| `docker compose up -d --build` | `DeadlineExceeded: context deadline exceeded` |
+| `DOCKER_BUILDKIT=0 docker compose build` | hangs, 35 min, no progress |
+| `docker pull python:3.12-slim` | hangs, 5 min, zero bytes |
+| `docker build` from an **already-local** base image | hangs, 5 min |
+
+The registry is genuinely reachable — `curl https://registry-1.docker.io/v2/`
+from inside the colima VM returns 401 in 0.66s. It is the image-transfer path
+specifically that is broken, and the last row shows the builder is wedged
+independently of the network.
+
+The untried fix is `colima stop && colima start` to reset the builder. **Do not
+try that within an hour of demoing** — if it fails you have no stack at all,
+and right now you have a working one. Rebuild the morning after, on a network
+that works.
 
 ---
 
@@ -54,8 +78,16 @@ honestly enough to act on"**.
 
 ### 2 · The live map (~90s)
 
-Real signals, right now: GeoNet, Mastodon, RNZ and MetService RSS, NZ Police
-Wellington, NZTA road events, Wellington Electricity outages.
+Real signals, right now: GeoNet, Mastodon, and RSS (RNZ, MetService,
+Wellington.Scoop, NZ Herald).
+
+> **Check before you claim the official feeds.** NZ Police, NZTA and Wellington
+> Electricity are merged in code (#3), but the containers running at 15:10 were
+> built from an older image and are **not** polling them — `docker compose logs
+> scraper-rss` lists the feeds it actually has. If Police isn't in that list,
+> say "official operator feeds are wired in" rather than naming them as live.
+> Claiming a source that isn't on the map is the one mistake that costs you the
+> room.
 
 Two things to point at:
 
