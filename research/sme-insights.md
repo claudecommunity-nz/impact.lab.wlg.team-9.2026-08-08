@@ -60,3 +60,30 @@ repo is public. Paraphrased; grouped by what it means for the build.
   but the SME's ask was a **verification model that works regardless of
   emergency type**, tuned per event later — which is what a source-reliability
   × corroboration grading gives.
+
+# Team planning discussion (second recording, same day)
+
+Decisions and ideas from the team's own working session:
+
+- **Prioritisation of themes is the missing layer.** The controller gets
+  everything at the same level; they need "which should I look at first".
+  Tiers, in order: **people at risk** ("a slip with people possibly buried")
+  → **property at risk** → **transport issues** → monitor. Staff safety is a
+  cross-cutting concern. Prioritisation should be explainable, not a magic
+  severity number.
+- **Flooding is the deep-dive scenario** — Wellington floods, historical and
+  hazard-model data exists (WCC/GWRC layers), and it generalises later.
+- **Dedup/threading**: time-of-post ≠ time-of-event; a post spawns a thread
+  with sub-threads; once a unique post is classified, don't re-triage it —
+  and two officers shouldn't triage the same cluster twice.
+- **Enrichment should ask contextual questions** — "is this place prone to
+  flooding? has it flooded in the last five years?" — the WCC GIS layers can
+  answer that at a point.
+- **Verification stays simple and trains the system**: yes/no +
+  time/date/location + short note; human decisions become training signal for
+  the automated grading over time.
+- **"Pieces on the board"** (explicitly flagged to remember): know where your
+  own field resources are; when a cluster pops up near one, push them a
+  notification to verify. Out of scope today, wanted next.
+- Other public sources named for the narrative: talkback radio, CB radio —
+  processable in near-real-time in principle, demo-narrative only today.
