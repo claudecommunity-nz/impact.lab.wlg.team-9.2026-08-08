@@ -173,6 +173,7 @@ aside {
   white-space: nowrap;
 }
 .chip.synthetic { border-color: var(--status-warning); color: var(--text-primary); }
+.chip.grade { font-weight: 650; color: var(--text-primary); font-variant-numeric: tabular-nums; }
 
 /* --- detail ------------------------------------------------------------- */
 #detail { display: none; }
@@ -288,6 +289,16 @@ aside {
         <div class="legend-note">
           Counted by publisher, not by post — the same story reprinted is one source.
           More sources means more reason to check, not that it is true.
+        </div>
+      </div>
+      <div class="legend">
+        <div class="section-title" style="margin-bottom:6px">Admiralty grading</div>
+        <div class="legend-row"><span class="chip grade">A–F</span> source reliability (A completely reliable … F cannot be judged)</div>
+        <div class="legend-row"><span class="chip grade">1–6</span> information credibility (1 confirmed … 6 cannot be judged)</div>
+        <div class="legend-note">
+          Graded automatically from source type and corroboration — e.g. F2 is an unknown
+          account whose report several independent publishers echo. Grade 1 (confirmed)
+          is never assigned by this tool: confirmation is a human decision.
         </div>
       </div>
       <div class="section-title">Groups to check, most corroborated first</div>
@@ -440,6 +451,7 @@ if (map) {
         `<strong>${label(p.issue_type)}${p.place ? " · " + p.place : ""}</strong>
          ${p.source_count} independent source${p.source_count === 1 ? "" : "s"},
          ${p.signal_count} item${p.signal_count === 1 ? "" : "s"}<br>
+         ${p.admiralty_grade ? `Graded ${p.admiralty_grade} — ${p.admiralty_meaning}<br>` : ""}
          <em>Unverified — click to read the sources</em>`)
       .addTo(map);
   });
@@ -536,6 +548,7 @@ function renderList() {
         ${p.signal_count} item${p.signal_count === 1 ? "" : "s"} · latest ${timeAgo(p.last_seen)}
       </div>
       <div class="card-sub" style="margin-top:6px">
+        ${p.admiralty_grade ? `<span class="chip grade" title="${p.admiralty_meaning || ""}">${p.admiralty_grade}</span>` : ""}
         ${sources.slice(0, 3).map((s) => `<span class="chip">${s}</span>`).join(" ")}
         ${sources.length > 3 ? `<span class="chip">+${sources.length - 3} more</span>` : ""}
         ${p.contains_synthetic === true || p.contains_synthetic === "true"
@@ -554,6 +567,7 @@ function renderList() {
 async function openCluster(id) {
   const data = await getJSON(`/clusters/${encodeURIComponent(id)}`);
   const c = data.cluster;
+  const adm = c.admiralty || {};
   state.selected = id;
 
   if (map) map.flyTo({ center: c.geo.coordinates, zoom: 14, speed: 1.4 });
@@ -564,10 +578,12 @@ async function openCluster(id) {
       <span class="sources-badge" style="background:${corrColor(c.source_count)}">
         ${c.source_count} source${c.source_count === 1 ? "" : "s"}
       </span>
+      ${adm.grade ? `<span class="chip grade" title="${adm.meaning || ""}">${adm.grade}</span>` : ""}
     </div>
     <div class="card-sub">${c.place || "location uncertain"} ·
       ${c.signal_count} item${c.signal_count === 1 ? "" : "s"} ·
       first seen ${timeAgo(c.first_seen)}, latest ${timeAgo(c.last_seen)}</div>
+    ${adm.grade ? `<div class="card-sub">Admiralty grade ${adm.grade} · ${adm.meaning}</div>` : ""}
 
     <div class="warning-strip" style="margin:10px 0; flex:none">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -592,12 +608,14 @@ async function openCluster(id) {
 function renderMember(s) {
   const cls = (s.enrichment && s.enrichment.classify) || {};
   const geo = (s.enrichment && s.enrichment.geolocate) || {};
+  const adm = (s.enrichment && s.enrichment.admiralty) || {};
   const synthetic = s.raw && s.raw.synthetic;
   return `<div class="member">
     <div class="member-meta">
       <span>${s.source.name}</span>
       <span>${timeAgo(s.published_at || s.ingested_at)}</span>
       <span class="chip">${label(cls.issue_type)}</span>
+      ${adm.grade ? `<span class="chip grade" title="${adm.meaning || ""}">${adm.grade}</span>` : ""}
       ${synthetic ? `<span class="chip synthetic">sample data</span>` : ""}
     </div>
     <div class="member-text">${(s.title ? `<strong>${s.title}</strong> ` : "")}${s.text}</div>
