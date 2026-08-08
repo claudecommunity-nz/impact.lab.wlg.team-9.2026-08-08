@@ -35,6 +35,15 @@ class LocationHint(BaseModel):
     method: str = "source-provided"
 
 
+class MediaItem(BaseModel):
+    """An image or video a scraper found attached to a post (a Mastodon
+    attachment, an RSS enclosure) — the browser loads it straight from the
+    publisher's own URL, nothing is re-hosted."""
+
+    type: str  # image | video
+    url: str
+
+
 class SignalIn(BaseModel):
     source: SourceRef
     text: str
@@ -43,6 +52,7 @@ class SignalIn(BaseModel):
     external_id: str | None = None
     published_at: datetime | None = None
     location_hint: LocationHint | None = None
+    media: list[MediaItem] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
 
     def signal_id(self) -> str:

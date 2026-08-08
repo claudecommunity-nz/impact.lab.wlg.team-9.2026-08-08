@@ -76,6 +76,14 @@ header {
 h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
 h1 span { font-weight: 400; color: var(--text-muted); }
 
+.page-nav { display: flex; gap: 4px; }
+.page-nav a {
+  font-size: 12.5px; padding: 4px 10px; border-radius: 999px;
+  color: var(--text-secondary); text-decoration: none; white-space: nowrap;
+}
+.page-nav a:hover { color: var(--text-primary); background: var(--surface-2); }
+.page-nav a.active { background: var(--meter-fill); color: #fff; }
+
 .warning-strip {
   display: flex;
   align-items: center;
@@ -346,6 +354,11 @@ aside {
 
 <header>
   <h1>Emerging impact signals <span>· Wellington</span></h1>
+  <nav class="page-nav">
+    <a href="/" class="active">Map</a>
+    <a href="/review.html">Verify signals</a>
+    <a href="/verified.html">Verified</a>
+  </nav>
 
   <!-- Status colour, icon and label together. Never colour alone, and never
        out of sight: this is the claim the whole prototype rests on. -->

@@ -18,10 +18,15 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from .db import ensure_indexes, get_db
 from .models import IngestResult, RunReport, SignalBatch, SignalIn
+
+# Sources anyone can post to with no editorial gate — the ones a human should
+# look at before the map treats them as anything more than "someone said so".
+REVIEW_SOURCE_TYPES = ["mastodon", "rss"]
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -91,6 +96,17 @@ def parse_since(value: str | None) -> datetime | None:
 
 def clean(doc: dict) -> dict:
     doc.pop("_id", None)
+    return doc
+
+
+def public_signal(doc: dict) -> dict:
+    """A signal doc safe to hand to a client.
+
+    Every media item is just a link to wherever the publisher already hosts
+    it — nothing is uploaded to or stored by this API.
+    """
+    doc = clean(doc)
+    doc["media"] = [{"type": m.get("type", "image"), "url": m["url"]} for m in doc.get("media") or []]
     return doc
 
 
@@ -238,13 +254,18 @@ def build_document(sig: SignalIn, now: datetime) -> dict:
         "ingested_at": now,
         "last_seen_at": now,
         "seen_count": 1,
+        "media": [m.model_dump() for m in sig.media],
         "raw": sig.raw,
         "enrichment": {},
         # Nothing in this pipeline verifies anything. Stamped on every document
-        # at ingest so it can't be forgotten downstream.
+        # at ingest so it can't be forgotten downstream. `method`/`verified_*`
+        # stay null until a human reviews it via /signals/{id}/verify.
         "verification": {
             "status": "unverified",
+            "method": None,
             "note": DISCLAIMER,
+            "verified_at": None,
+            "verified_by": None,
         },
     }
     if sig.location_hint:
@@ -304,7 +325,7 @@ def list_signals(
         "total": total,
         "offset": offset,
         "limit": limit,
-        "signals": [clean(d) for d in cur],
+        "signals": [public_signal(d) for d in cur],
     }
 
 
@@ -378,7 +399,117 @@ def get_cluster(cluster_id: str):
     return {
         "disclaimer": DISCLAIMER,
         "cluster": clean(cluster),
-        "signals": [clean(s) for s in signals],
+        "signals": [public_signal(s) for s in signals],
+    }
+
+
+# --------------------------------------------------------------------------
+# human review — a person looks at low-trust scraped items and says whether
+# they're plausible. This is a judgement call, not confirmation; the wording
+# returned to the client says so every time.
+# --------------------------------------------------------------------------
+
+REVIEW_DISCLAIMER = (
+    "These come from sources anyone can post to, with no editorial check. "
+    "Confirming here records that a person found an item plausible — it is not "
+    "official confirmation that the event happened. In an emergency, call 111."
+)
+
+
+class VerifyRequest(BaseModel):
+    reviewer: str | None = None
+    note: str | None = None
+
+
+@app.get("/review/queue")
+def review_queue(
+    source_type: str = Query(",".join(REVIEW_SOURCE_TYPES), description="comma-separated source types"),
+    since: str | None = Query("3d", description="6h, 2d or ISO 8601"),
+    limit: int = Query(100, le=500),
+):
+    """Unreviewed items from low-trust sources, newest first."""
+    db = get_db()
+    types = [t.strip() for t in source_type.split(",") if t.strip()]
+    q: dict = {"verification.status": "unverified"}
+    if types:
+        q["source.type"] = {"$in": types}
+    cutoff = parse_since(since)
+    if cutoff:
+        q["$or"] = [{"published_at": {"$gte": cutoff}}, {"ingested_at": {"$gte": cutoff}}]
+    cur = db.signals.find(q).sort("ingested_at", -1).limit(limit)
+    return {
+        "disclaimer": REVIEW_DISCLAIMER,
+        "signals": [public_signal(d) for d in cur],
+    }
+
+
+def _set_verification(signal_id: str, status: str, method: str, default_note: str, body: VerifyRequest) -> dict:
+    db = get_db()
+    now = datetime.now(timezone.utc)
+    reviewer = (body.reviewer or "").strip() or None
+    note = (body.note or "").strip() or default_note
+    result = db.signals.update_one(
+        {"signal_id": signal_id},
+        {
+            "$set": {
+                "verification.status": status,
+                "verification.method": method,
+                "verification.note": note,
+                "verification.verified_at": now,
+                "verification.verified_by": reviewer,
+            }
+        },
+    )
+    if result.matched_count == 0:
+        raise HTTPException(404, "no such signal")
+    return public_signal(db.signals.find_one({"signal_id": signal_id}))
+
+
+@app.post("/signals/{signal_id}/verify")
+def verify_signal(signal_id: str, body: VerifyRequest = VerifyRequest()):
+    """A human reviewed this item and judged it plausible."""
+    return _set_verification(
+        signal_id,
+        status="verified",
+        method="human_reviewed",
+        default_note="Confirmed plausible by a human reviewer. This is a judgement call, not official confirmation.",
+        body=body,
+    )
+
+
+@app.post("/signals/{signal_id}/dismiss")
+def dismiss_signal(signal_id: str, body: VerifyRequest = VerifyRequest()):
+    """A human reviewed this item and judged it not worth carrying forward."""
+    return _set_verification(
+        signal_id,
+        status="dismissed",
+        method="human_reviewed",
+        default_note="Reviewed and set aside — judged not plausible or not relevant.",
+        body=body,
+    )
+
+
+VERIFIED_DISCLAIMER = (
+    "A human reviewer judged this plausible — that is not official confirmation "
+    "that the event happened. In an emergency, call 111."
+)
+
+
+@app.get("/verified")
+def verified_signals(
+    since: str | None = Query("7d", description="6h, 2d or ISO 8601, filtered on when it was verified"),
+    limit: int = Query(100, le=500),
+):
+    """Everything currently marked verified, newest confirmation first."""
+    db = get_db()
+    q: dict = {"verification.status": "verified"}
+    cutoff = parse_since(since)
+    if cutoff:
+        q["verification.verified_at"] = {"$gte": cutoff}
+    cur = db.signals.find(q).sort("verification.verified_at", -1).limit(limit)
+    return {
+        "disclaimer": VERIFIED_DISCLAIMER,
+        "signals": [public_signal(d) for d in cur],
     }
 
 
