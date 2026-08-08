@@ -125,6 +125,20 @@ services:
       SOURCES: nzta
       SCRAPE_INTERVAL_SECONDS: ${NZTA_INTERVAL:-120}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  # Community-shared screenshots of social posts, parsed with a vision model.
+  # Nothing is scraped from any platform: a person chooses to share what they
+  # can already see. Without GEMINI_API_KEY the service idles and logs.
+  scraper-screenshots:
+    <<: *scraper
+    environment:
+      INGESTION_URL: http://api:8000
+      SOURCES: screenshots
+      SCRAPE_INTERVAL_SECONDS: ${SCREENSHOT_INTERVAL:-20}
+      SCREENSHOT_INBOX: /inbox
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./screenshot-inbox:/inbox
 
   # ---- enrichment: scheduled jobs over the signal store --------------------
   enrichment:
