@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from .db import ensure_indexes, get_db
-from .models import IngestResult, SignalBatch, SignalIn
+from .models import IngestResult, RunReport, SignalBatch, SignalIn
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -269,16 +269,41 @@ def list_signals(
     issue_type: str | None = None,
     source_type: str | None = None,
     located: bool = False,
+    q: str | None = Query(None, description="substring match on title and text"),
+    unlocated_only: bool = Query(False, description="only signals no place could be found for"),
+    sort: str = Query("published_at", pattern="^(published_at|ingested_at)$"),
     limit: int = Query(200, le=2000),
+    offset: int = Query(0, ge=0),
 ):
+    """The raw store, paged.
+
+    Deliberately unfiltered by map-ability: `unlocated_only` exists because the
+    signals that never reach the map are the ones most worth eyeballing — they
+    are real collected items the gazetteer could not place, and they are
+    invisible everywhere else in the interface.
+    """
     db = get_db()
-    cur = (
-        db.signals.find(signal_filter(since, issue_type, source_type, located))
-        .sort("published_at", -1)
-        .limit(limit)
-    )
+    query = signal_filter(since, issue_type, source_type, located)
+
+    if unlocated_only:
+        query["geo"] = {"$exists": False}
+    if q:
+        # Escaped: a user typing "(" into a search box should get no results,
+        # not a 500 from an invalid regular expression.
+        pattern = re.escape(q.strip())
+        query["$and"] = query.get("$and", []) + [
+            {"$or": [{"title": {"$regex": pattern, "$options": "i"}},
+                     {"text": {"$regex": pattern, "$options": "i"}}]}
+        ]
+
+    total = db.signals.count_documents(query)
+    cur = db.signals.find(query).sort(sort, -1).skip(offset).limit(limit)
+
     return {
         "disclaimer": DISCLAIMER,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
         "signals": [clean(d) for d in cur],
     }
 
@@ -354,6 +379,72 @@ def get_cluster(cluster_id: str):
         "disclaimer": DISCLAIMER,
         "cluster": clean(cluster),
         "signals": [clean(s) for s in signals],
+    }
+
+
+@app.post("/runs")
+def report_run(run: RunReport):
+    """Record how a pipeline component's last run went.
+
+    Upserted per component rather than appended, plus a short rolling history.
+    The dashboard needs "is this thing alive and what did it just do", not an
+    audit log, and an unbounded run log on a free-tier database is a slow leak.
+    """
+    now = datetime.now(timezone.utc)
+    doc = run.model_dump()
+    targets = doc.pop("targets", [])
+    summary = {"at": now, "status": doc["status"], "result": doc.get("result", {})}
+
+    get_db().component_runs.update_one(
+        {"component": run.component},
+        {
+            "$set": {**doc, "last_run_at": now, "targets": targets},
+            "$inc": {"run_count": 1},
+            "$push": {"recent": {"$each": [summary], "$slice": -10}},
+        },
+        upsert=True,
+    )
+    return {"ok": True}
+
+
+@app.get("/pipeline")
+def pipeline():
+    """Everything the dashboard needs: what is running, when it last ran, what it polls.
+
+    `stale` is computed here rather than in the browser so every consumer
+    agrees on it. A component is stale once it has missed roughly two of its
+    own intervals — that is the difference between "quiet source" and "stopped
+    working", which is the whole question a pipeline dashboard exists to answer.
+    """
+    db = get_db()
+    now = datetime.now(timezone.utc)
+    components = []
+
+    for doc in db.component_runs.find().sort("component", 1):
+        clean(doc)
+        last = doc.get("last_run_at")
+        interval = doc.get("interval_seconds") or 600
+        age = (now - last).total_seconds() if isinstance(last, datetime) else None
+
+        doc["last_run_at"] = _iso(last)
+        doc["age_seconds"] = round(age) if age is not None else None
+        doc["stale"] = age is not None and age > max(120, interval * 2.5)
+        for entry in doc.get("recent", []):
+            entry["at"] = _iso(entry.get("at"))
+        for target in doc.get("targets", []):
+            target["at"] = _iso(target.get("at"))
+        components.append(doc)
+
+    return {
+        "disclaimer": DISCLAIMER,
+        "generated_at": _iso(now),
+        "components": components,
+        "counts": {
+            "total": len(components),
+            "healthy": sum(1 for c in components if c["status"] == "ok" and not c["stale"]),
+            "erroring": sum(1 for c in components if c["status"] == "error"),
+            "stale": sum(1 for c in components if c["stale"]),
+        },
     }
 
 

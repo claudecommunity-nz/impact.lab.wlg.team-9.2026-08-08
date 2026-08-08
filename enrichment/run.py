@@ -18,6 +18,7 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime, timezone
 
 import jobs
 from db import get_db
@@ -81,14 +82,64 @@ def wait_for_mongo(timeout: int = 120) -> bool:
     return False
 
 
-def run_job(name: str) -> None:
+def record_run(name: str, **fields) -> None:
+    """Write a heartbeat for the pipeline dashboard.
+
+    Best-effort: a job that worked must not be reported as failed because the
+    bookkeeping write failed afterwards.
+    """
+    try:
+        get_db().component_runs.update_one(
+            {"component": name},
+            {
+                "$set": {
+                    "component": name,
+                    "kind": "enrichment",
+                    "last_run_at": datetime.now(timezone.utc),
+                    **fields,
+                },
+                "$inc": {"run_count": 1},
+                # A short history, so the dashboard can show that a job is
+                # ticking rather than just that it ran once at some point.
+                "$push": {
+                    "recent": {
+                        "$each": [{"at": datetime.now(timezone.utc), **fields}],
+                        "$slice": -10,
+                    }
+                },
+            },
+            upsert=True,
+        )
+    except PyMongoError as exc:
+        log.debug("could not record run for %s: %s", name, exc)
+
+
+def run_job(name: str, interval: int | None = None) -> None:
+    started = time.time()
     try:
         module = jobs.load(name)
         result = module.run(get_db())
         if any(result.values()):
             log.info("%s → %s", name, result)
-    except Exception:  # noqa: BLE001 — one failing job must not stop the others
+        record_run(
+            name,
+            status="ok",
+            duration_ms=int((time.time() - started) * 1000),
+            result=result,
+            version=getattr(module, "VERSION", None),
+            interval_seconds=interval,
+            error=None,
+            description=(module.__doc__ or "").strip().split("\n")[0],
+        )
+    except Exception as exc:  # noqa: BLE001 — one failing job must not stop the others
         log.exception("job %s raised", name)
+        record_run(
+            name,
+            status="error",
+            duration_ms=int((time.time() - started) * 1000),
+            error=f"{type(exc).__name__}: {exc}"[:500],
+            interval_seconds=interval,
+        )
 
 
 def main() -> None:
@@ -105,6 +156,7 @@ def main() -> None:
             run_job(name)
         return
 
+
     schedule = parse_schedule()
     log.info("scheduled: %s", ", ".join(f"{n} every {s}s" for n, s in schedule.items()))
 
@@ -113,7 +165,7 @@ def main() -> None:
         now = time.monotonic()
         for name, interval in schedule.items():
             if now >= next_due[name]:
-                run_job(name)
+                run_job(name, interval)
                 next_due[name] = time.monotonic() + interval
         time.sleep(TICK)
 

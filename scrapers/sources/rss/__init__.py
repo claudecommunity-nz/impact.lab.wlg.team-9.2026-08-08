@@ -15,6 +15,7 @@ import os
 import feedparser
 
 from common.relevance import looks_relevant
+from common.telemetry import record_target
 from common.text import clean_text, parse_time
 
 log = logging.getLogger(__name__)
@@ -48,6 +49,16 @@ def _configured_feeds() -> list[tuple[str, str, bool]]:
     return feeds
 
 
+def describe() -> dict:
+    """What this collector is configured to poll — shown on the dashboard."""
+    feeds = _configured_feeds()
+    return {
+        "summary": f"{len(feeds)} RSS/Atom feeds",
+        "filter_mode": os.getenv("FILTER_MODE", "both"),
+        "feeds": [{"name": n, "url": u, "local": l} for n, u, l in feeds],
+    }
+
+
 def collect() -> list[dict]:
     signals = []
     for name, url, local in _configured_feeds():
@@ -55,10 +66,13 @@ def collect() -> list[dict]:
             parsed = feedparser.parse(url, agent=USER_AGENT)
         except Exception as exc:  # noqa: BLE001 — a bad feed must not stop the rest
             log.warning("feed %s failed: %s", name, exc)
+            record_target(name, url, status="error", detail=str(exc)[:200])
             continue
 
         if parsed.bozo and not parsed.entries:
-            log.warning("feed %s unusable: %s", name, getattr(parsed, "bozo_exception", "?"))
+            reason = str(getattr(parsed, "bozo_exception", "?"))[:200]
+            log.warning("feed %s unusable: %s", name, reason)
+            record_target(name, url, fetched=0, status="error", detail=reason)
             continue
 
         kept = 0
@@ -93,5 +107,18 @@ def collect() -> list[dict]:
                 }
             )
             kept += 1
+
+        record_target(
+            name,
+            url,
+            fetched=len(parsed.entries),
+            kept=kept,
+            status="ok" if parsed.entries else "empty",
+            # The interesting number on the dashboard is not how many entries a
+            # feed has, it is how many survived the relevance filter. A feed
+            # returning 40 items and keeping 0 every cycle is either irrelevant
+            # or the filter is wrong, and both are worth seeing.
+            detail=f"{kept} of {len(parsed.entries)} passed the relevance filter",
+        )
         log.info("rss %s: %d/%d entries kept", name, kept, len(parsed.entries))
     return signals

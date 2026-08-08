@@ -16,6 +16,7 @@ import os
 import requests
 
 from common.geo import WELLINGTON, haversine_km
+from common.telemetry import record_target
 from common.text import parse_time
 
 log = logging.getLogger(__name__)
@@ -31,6 +32,15 @@ MMI_DESCRIPTION = {
 }
 
 
+def describe() -> dict:
+    return {
+        "summary": f"GeoNet quake API, MMI ≥ {MIN_MMI}, within {RADIUS_KM:.0f} km of Wellington",
+        "endpoint": API,
+        "min_mmi": MIN_MMI,
+        "radius_km": RADIUS_KM,
+    }
+
+
 def collect() -> list[dict]:
     try:
         r = requests.get(
@@ -43,6 +53,7 @@ def collect() -> list[dict]:
         features = r.json().get("features", [])
     except (requests.RequestException, ValueError) as exc:
         log.warning("geonet fetch failed: %s", exc)
+        record_target("GeoNet quake API", API, status="error", detail=str(exc)[:200])
         return []
 
     signals = []
@@ -101,5 +112,13 @@ def collect() -> list[dict]:
             }
         )
 
+    record_target(
+        "GeoNet quake API",
+        API,
+        fetched=len(features),
+        kept=len(signals),
+        status="ok" if features else "empty",
+        detail=f"{len(signals)} of {len(features)} quakes within {RADIUS_KM:.0f} km of Wellington",
+    )
     log.info("geonet: %d quakes within %.0f km", len(signals), RADIUS_KM)
     return signals

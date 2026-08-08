@@ -63,3 +63,33 @@ class IngestResult(BaseModel):
     received: int
     inserted: int
     duplicates: int
+
+
+class TargetReport(BaseModel):
+    """One endpoint a collector polled during a run."""
+
+    name: str
+    url: str | None = None
+    fetched: int | None = None
+    kept: int | None = None
+    status: str = "ok"
+    detail: str | None = None
+    at: datetime | None = None
+
+
+class RunReport(BaseModel):
+    """A collector telling the store how its last run went.
+
+    Loose on purpose — this is diagnostics, and a scraper that reports nothing
+    useful should still be able to say it ran.
+    """
+
+    component: str
+    kind: str = "scraper"
+    status: str = "ok"  # ok | empty | error
+    duration_ms: int | None = None
+    interval_seconds: int | None = None
+    error: str | None = None
+    result: dict[str, Any] = Field(default_factory=dict)
+    targets: list[TargetReport] = Field(default_factory=list)
+    describes: dict[str, Any] = Field(default_factory=dict)
