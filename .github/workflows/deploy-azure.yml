@@ -76,17 +76,17 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # Read at deploy time rather than stored as a GitHub secret: one less
-      # credential to rotate, and it can never go stale against the database.
-      - name: Read the Cosmos connection string
+      # The database is a MongoDB Atlas cluster, outside Azure, so the
+      # connection string is a repo secret rather than something az can fetch.
+      # Checked here so a missing secret fails in five seconds with a clear
+      # message, instead of as containers that start and then cannot reach a
+      # database.
+      - name: Check the database secret is present
         run: |
-          MONGO_URI="$(az cosmosdb keys list \
-            --name '${{ vars.COSMOS_ACCOUNT }}' \
-            --resource-group '${{ vars.AZURE_RESOURCE_GROUP }}' \
-            --type connection-strings \
-            --query 'connectionStrings[0].connectionString' -o tsv)"
-          echo "::add-mask::$MONGO_URI"
-          echo "MONGO_URI=$MONGO_URI" >> "$GITHUB_ENV"
+          if [ -z "${{ secrets.MONGO_URI }}" ]; then
+            echo "::error::MONGO_URI secret is not set. Run deploy/azure/bootstrap.sh, or set it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
 
       - name: Read the registry credentials
         run: |
@@ -106,6 +106,8 @@ jobs:
           GROUP_NAME: ${{ vars.ACI_GROUP_NAME }}
           DNS_LABEL: ${{ vars.ACI_DNS_LABEL }}
           DEPLOY_SOURCE: github-actions
+          # Actions masks registered secrets in logs automatically.
+          MONGO_URI: ${{ secrets.MONGO_URI }}
         run: |
           chmod +x deploy/azure/render-aci.sh
           ./deploy/azure/render-aci.sh > aci.generated.yaml

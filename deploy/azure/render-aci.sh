@@ -20,9 +20,9 @@ for var in LOCATION GROUP_NAME DNS_LABEL ACR_SERVER ACR_USERNAME ACR_PASSWORD TA
   fi
 done
 
-# Substituted in Python, not sed: a Cosmos connection string contains & and /,
-# both of which mean something to sed's replacement syntax and would corrupt
-# the value silently.
+# Substituted in Python, not sed: a MongoDB connection string routinely
+# contains & and /, both of which mean something to sed's replacement syntax
+# and would corrupt the value silently.
 TEMPLATE_PATH="$TEMPLATE" python3 <<'PY'
 import os
 

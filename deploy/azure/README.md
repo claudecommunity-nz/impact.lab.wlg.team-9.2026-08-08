@@ -1,67 +1,96 @@
 # Deploying to Azure
 
+Compute runs in Azure Container Instances. The database is a free MongoDB Atlas
+cluster, outside Azure — real MongoDB, which is what this pipeline was built and
+tested against.
+
 Pushes to `main` deploy themselves via
 [`.github/workflows/deploy-azure.yml`](../../.github/workflows/deploy-azure.yml).
 Before that works, one person runs the bootstrap once.
 
 ## What you have to do by hand
 
-Four things. Everything else is scripted.
+Five things. Everything else is scripted.
 
-**1. An Azure account with an active subscription.** This is the account that
-gets billed. If it isn't the one this machine is normally signed in to, sign in
-to it specifically:
+### 1. A free MongoDB Atlas cluster
+
+Sign up at [mongodb.com/atlas](https://www.mongodb.com/atlas), then:
+
+- **Create a cluster** — choose **M0** (the free forever tier). Pick the
+  nearest region the free tier offers; at this volume latency is irrelevant, so
+  don't spend time on it.
+- **Create a database user** — Database Access → Add New Database User.
+  Use **Autogenerate Secure Password** and copy it now; you can't read it back.
+  Role: *Read and write to any database*.
+- **Allow network access** — Network Access → Add IP Address → **Allow access
+  from anywhere** (`0.0.0.0/0`).
+- **Copy the connection string** — Database → Connect → Drivers → Python, then
+  replace `<password>` with the real password.
+
+About that `0.0.0.0/0`: ACI's outbound IP isn't guaranteed stable, and every
+deploy deletes and recreates the container group, so a narrow allowlist will
+break. The protection is the password, not the IP range. That's an acceptable
+trade for public hazard-signal data on a one-day prototype, and it would not be
+acceptable for anything with personal data in it.
+
+### 2. An Azure account with an active subscription
+
+This is what gets billed. If it isn't the account this machine normally uses,
+sign in to it specifically — `az` quietly remembers whichever you used last:
 
 ```bash
 az logout
 az login                              # or: az login --use-device-code
-az account list --output table        # check which subscriptions you can see
+az account list --output table
 az account set --subscription "<name or id>"
 az account show --query "{user:user.name, sub:name}" -o table
 ```
 
-The bootstrap script prints the account it's about to use and makes you type
-`yes`, precisely because `az` quietly remembers whichever account you used last.
+The bootstrap prints the account it's about to use and makes you type `yes`.
 
-**2. Permission to create an app registration in Entra ID.** The workflow signs
-in with OIDC federation, which needs an app registration. Many corporate
+### 3. Permission to create an app registration in Entra ID
+
+The workflow signs in with OIDC federation, which needs one. Many corporate
 tenants block non-admins from creating them. Check first:
 
 ```bash
 az ad app create --display-name delete-me-permission-check --query appId -o tsv
-# if that works, clean it up:
-az ad app delete --id <the id it printed>
+az ad app delete --id <the id it printed>          # clean up if it worked
 ```
 
 If it's blocked, ask a tenant admin to run the bootstrap, or use a personal
-Azure account for the hackathon. There is a password-based fallback in
+Azure account. There's a password-based fallback in
 [Alternatives](#if-you-cannot-create-an-app-registration) below.
 
-**3. Run the bootstrap.**
+### 4. Run the bootstrap
 
 ```bash
 ./deploy/azure/bootstrap.sh
 ```
 
-Ten to fifteen minutes, most of it waiting for Cosmos DB. It creates the
-resource group, container registry, Cosmos DB account and database, the app
-registration with GitHub OIDC federation, and a Contributor role assignment
-scoped to the one resource group. Then it writes the resulting IDs into the
-GitHub repo as secrets and variables via the `gh` CLI — or prints them for you
-to paste if `gh` isn't authenticated.
+Two or three minutes. It creates the resource group, the container registry,
+the app registration with GitHub OIDC federation, and a Contributor role
+assignment scoped to that one resource group. It then asks you to paste the
+Atlas connection string, **tests it before saving**, and writes everything into
+the GitHub repo as secrets and variables via the `gh` CLI.
+
+Testing the connection there is deliberate: a wrong password and a missing
+network-access entry produce the same symptom half an hour later — containers
+that start, then sit failing to reach a database.
 
 Safe to re-run; every step checks for what it already made.
 
-**4. Set a spending budget.** Not scripted, because a budget you didn't set
-yourself is a budget you won't trust. Portal → **Cost Management** → **Budgets**
-→ **Add**:
+### 5. Set a spending budget
 
-- Scope: the subscription (or just the `team9-signals-rg` resource group)
+Not scripted, because a budget you didn't set yourself is one you won't trust.
+Portal → **Cost Management** → **Budgets** → **Add**:
+
+- Scope: the subscription, or just `team9-signals-rg`
 - Amount: whatever ceiling you want against your $150
 - Alerts at 50%, 80% and 100% of **actual** cost, to your email
 
-Budget alerts notify. They do not stop anything from running. The stop button
-is `./deploy/azure/deploy.sh stop`.
+Budget alerts notify. They don't stop anything. The stop button is
+`./deploy/azure/deploy.sh stop`.
 
 ## Then
 
@@ -72,7 +101,7 @@ gh workflow run deploy-azure.yml     # or just push to main
 The workflow builds all four images in parallel, replaces the container group,
 and **smoke tests it** — it fails the run if the API never becomes healthy, the
 UI doesn't answer, or the GeoJSON isn't valid. A green tick means it's actually
-up, not just that `az` returned zero. The URLs land in the run summary.
+up, not that `az` returned zero. URLs land in the run summary.
 
 ## Day-to-day
 
@@ -82,8 +111,11 @@ up, not just that `az` returned zero. The URLs land in the run summary.
 ./deploy/azure/deploy.sh logs api  # follow one container
 ./deploy/azure/deploy.sh           # deploy uncommitted local changes
 ./deploy/azure/deploy.sh stop      # delete the group, keep the data — stops compute billing
-./deploy/azure/deploy.sh destroy   # delete everything, database included
+./deploy/azure/deploy.sh destroy   # delete the Azure resources
 ```
+
+`destroy` doesn't touch Atlas. Delete that cluster in the Atlas UI if you want
+it gone.
 
 ## What runs where
 
@@ -92,29 +124,27 @@ up, not just that `az` returned zero. The URLs land in the run summary.
 | Service addressing | service names (`api`, `mongo`) | `127.0.0.1` — one network namespace per group |
 | Scrapers | one container per source | one container running all sources |
 | Startup order | `depends_on` + healthchecks | none; each service retries |
-| Database | MongoDB container + named volume | Cosmos DB, outside the group |
+| Database | MongoDB container + named volume | MongoDB Atlas M0, outside Azure |
 
-Because Cosmos sits outside the container group, redeploying — which always
-deletes and recreates the group — keeps the data.
+Because the database sits outside the container group, redeploying — which
+always deletes and recreates the group — keeps the data.
 
 ## Cost against $150
 
 | | |
 |---|---|
 | Container group (1.75 vCPU, 3.5 GB) | ~US$0.05/hr, ~$1.20/day, billed per second while running |
-| Cosmos DB free tier | $0 — 1000 RU/s and 25 GB, one account per subscription |
-| Cosmos DB serverless (fallback) | cents/day at this volume |
+| MongoDB Atlas M0 | $0, and not on your Azure bill at all |
 | Container registry (Basic) | ~US$0.17/day |
 | Egress, logs | negligible |
 
-So roughly **$1.50/day left running**, and the compute part stops the moment
-you run `deploy.sh stop`. A weekend costs a few dollars. The way this budget
-actually gets spent is leaving it running for a month and forgetting — hence
-step 4.
+So roughly **$1.40/day while it's running**, and the compute part stops the
+moment you run `deploy.sh stop`. A weekend costs a few dollars. The way this
+budget actually disappears is leaving it up for a month and forgetting — hence
+step 5.
 
-The bootstrap uses the Cosmos **free tier** if the subscription hasn't already
-used it (only one account per subscription may have it) and falls back to
-**serverless** if it has. Either is fine here; it tells you which it picked.
+M0 gives 512 MB, which is far more than this needs: the whole corpus is a few
+hundred kilobytes at hackathon volumes.
 
 ## Four things that cost an hour if you don't know them
 
@@ -128,12 +158,10 @@ commit and that isn't a mutable field, so both paths delete and recreate. The
 DNS label survives; in-group state does not, which is why the database is
 outside it.
 
-**Cosmos DB is not MongoDB.** It speaks the wire protocol, and everything this
-pipeline does is supported, but it refuses a unique index on a collection that
-already holds data. `ensure_indexes` therefore attempts each index
-independently and logs anything the server refuses rather than failing to
-start — check the API log after the first deploy to confirm both unique indexes
-were created. Without them, re-scraping stops de-duplicating.
+**`mongodb+srv://` needs dnspython.** Atlas hands out an SRV connection string
+and pymongo can't resolve one without it. It's pinned in both
+`requirements.txt` files — if you strip it out, you get a connection error that
+looks like a network problem and isn't.
 
 **Only one port set per group.** Everything shares one public IP. The group
 exposes 80 for the UI and 8000 for the API, and two containers cannot both
@@ -158,9 +186,9 @@ both `azure/login@v2` steps replace the three `client-id`/`tenant-id`/
 This stores a password that expires (a year by default) and has to be rotated.
 OIDC is better where the tenant allows it.
 
-## If the data needs to outlive the hackathon
+## If this outlives the hackathon
 
-It already does — Cosmos persists independently of the container group. But
-Cosmos free tier is not a backup. `az cosmosdb mongodb collection show` and
-the portal's point-in-time restore are worth a look before anyone treats this
-as anything other than a prototype.
+Two things to revisit before anyone treats it as more than a prototype: the
+`0.0.0.0/0` network rule, and the fact that the cluster lives in an individual's
+personal Atlas account rather than anywhere the Council could inherit. Neither
+matters for a one-day build; both matter the moment it's handed over.

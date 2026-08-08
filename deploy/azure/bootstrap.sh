@@ -9,13 +9,13 @@
 # It creates:
 #   * a resource group
 #   * a container registry
-#   * a Cosmos DB account (MongoDB API) + the `signals` database
 #   * an Entra app registration with GitHub OIDC federation, so the workflow
 #     authenticates with no stored password
 #   * a Contributor role assignment scoped to the resource group only
 #
-# and then writes the resulting IDs into the GitHub repo as secrets and
-# variables, if the `gh` CLI is available and authenticated.
+# and collects the MongoDB Atlas connection string (the database lives outside
+# Azure), then writes everything into the GitHub repo as secrets and variables
+# if the `gh` CLI is available and authenticated.
 #
 # Safe to re-run: every step checks for what it already created.
 
@@ -23,11 +23,11 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENV_FILE="$REPO_ROOT/deploy/azure/.azure-env"
+MONGO_URI_FILE="$REPO_ROOT/deploy/azure/.mongo-uri"
 
 LOCATION="${LOCATION:-australiaeast}"          # closest region to Wellington
 RESOURCE_GROUP="${RESOURCE_GROUP:-team9-signals-rg}"
 GROUP_NAME="${GROUP_NAME:-team9-signals}"
-COSMOS_SERVER_VERSION="${COSMOS_SERVER_VERSION:-4.2}"
 APP_NAME="${APP_NAME:-team9-signals-github-deploy}"
 
 say()  { printf '\n\033[1m▸ %s\033[0m\n' "$*"; }
@@ -81,7 +81,6 @@ if [[ -z "${ACR_NAME:-}" ]]; then
   SUFFIX="$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   ACR_NAME="team9signals${SUFFIX}"
   DNS_LABEL="team9-signals-${SUFFIX}"
-  COSMOS_ACCOUNT="team9-signals-${SUFFIX}"
 fi
 
 say "Container registry $ACR_NAME"
@@ -98,81 +97,65 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# 3. Cosmos DB (MongoDB API)
+# 3. MongoDB Atlas connection string
 # --------------------------------------------------------------------------
-say "Cosmos DB account $COSMOS_ACCOUNT"
-if az cosmosdb show --name "$COSMOS_ACCOUNT" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
-  note "already exists"
-else
-  # Free tier gives 1000 RU/s and 25 GB at no cost, but only one account per
-  # subscription may have it. If it is already spoken for, fall back to
-  # serverless, which bills per request and costs cents at this volume.
-  USED_FREE_TIER="$(az cosmosdb list --query "[?enableFreeTier] | length(@)" -o tsv 2>/dev/null || echo 0)"
+# The database is a free Atlas M0 cluster rather than anything in Azure. It is
+# real MongoDB, which is what this pipeline was built and tested against — a
+# compatibility layer would mean finding out about its differences on the day.
+# Creating the cluster is a web signup, so it is the one thing here that cannot
+# be scripted; this step collects the result and checks it works.
+say "MongoDB Atlas connection string"
 
-  if [[ "$USED_FREE_TIER" == "0" ]]; then
-    note "no free-tier account in this subscription yet — using it"
-    COSMOS_MODE="free"
-    EXTRA_ARGS=(--enable-free-tier true)
-  else
-    warn "free tier already used by another account in this subscription — using serverless"
-    COSMOS_MODE="serverless"
-    EXTRA_ARGS=(--capabilities EnableServerless)
-  fi
-
-  note "creating (this takes 5-10 minutes)"
-  if ! az cosmosdb create \
-    --name "$COSMOS_ACCOUNT" \
-    --resource-group "$RESOURCE_GROUP" \
-    --kind MongoDB \
-    --server-version "$COSMOS_SERVER_VERSION" \
-    --default-consistency-level Session \
-    --locations regionName="$LOCATION" failoverPriority=0 isZoneRedundant=False \
-    "${EXTRA_ARGS[@]}" \
-    --output none
-  then
-    if [[ "$COSMOS_MODE" == "free" ]]; then
-      warn "free-tier creation failed; retrying as serverless"
-      COSMOS_MODE="serverless"
-      az cosmosdb create \
-        --name "$COSMOS_ACCOUNT" \
-        --resource-group "$RESOURCE_GROUP" \
-        --kind MongoDB \
-        --server-version "$COSMOS_SERVER_VERSION" \
-        --default-consistency-level Session \
-        --locations regionName="$LOCATION" failoverPriority=0 isZoneRedundant=False \
-        --capabilities EnableServerless \
-        --output none
-    else
-      fail "could not create the Cosmos DB account"
-    fi
-  fi
-  note "created ($COSMOS_MODE)"
+if [[ -z "${MONGO_URI:-}" && -f "$MONGO_URI_FILE" ]]; then
+  MONGO_URI="$(cat "$MONGO_URI_FILE")"
+  note "read from $(basename "$MONGO_URI_FILE")"
 fi
 
-say "Cosmos database 'signals'"
-if az cosmosdb mongodb database show \
-     --account-name "$COSMOS_ACCOUNT" --resource-group "$RESOURCE_GROUP" \
-     --name signals >/dev/null 2>&1; then
-  note "already exists"
-else
-  # Shared database-level throughput on a free-tier account: both collections
-  # draw from the same 1000 RU/s, which is the part that is free. Per-collection
-  # throughput would provision 400 RU/s each and start costing money.
-  IS_SERVERLESS="$(az cosmosdb show --name "$COSMOS_ACCOUNT" --resource-group "$RESOURCE_GROUP" \
-    --query "contains(to_string(capabilities), 'EnableServerless')" -o tsv 2>/dev/null || echo false)"
+if [[ -z "${MONGO_URI:-}" ]]; then
+  cat <<'EOF'
 
-  if [[ "$IS_SERVERLESS" == "true" ]]; then
-    az cosmosdb mongodb database create \
-      --account-name "$COSMOS_ACCOUNT" --resource-group "$RESOURCE_GROUP" \
-      --name signals --output none
-    note "created (serverless — no provisioned throughput)"
-  else
-    az cosmosdb mongodb database create \
-      --account-name "$COSMOS_ACCOUNT" --resource-group "$RESOURCE_GROUP" \
-      --name signals --throughput 1000 --output none
-    note "created (1000 RU/s shared across collections)"
-  fi
+  From the Atlas UI: Database → Connect → Drivers → Python, and copy the
+  connection string. Then replace <password> with the database user's actual
+  password. It looks like:
+
+    mongodb+srv://USER:PASSWORD@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority
+
+EOF
+  read -r -s -p "  Paste it (hidden): " MONGO_URI
+  echo
 fi
+
+[[ -n "$MONGO_URI" ]] || fail "no connection string given"
+[[ "$MONGO_URI" == mongodb+srv://* || "$MONGO_URI" == mongodb://* ]] \
+  || fail "that does not look like a MongoDB connection string"
+
+if [[ "$MONGO_URI" == *"<password>"* || "$MONGO_URI" == *"<db_password>"* ]]; then
+  fail "the placeholder is still in there — replace <password> with the real one"
+fi
+
+# Verified now rather than at deploy time. A wrong password or a missing
+# network-access entry produces an identical symptom half an hour later —
+# containers that start, then sit there failing to reach the database.
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  note "testing the connection"
+  if docker run --rm mongo:7 mongosh "$MONGO_URI" --quiet \
+       --eval 'db.adminCommand({ping:1}).ok' 2>/dev/null | grep -q 1; then
+    note "connected"
+  else
+    warn "could not connect. The usual causes, in order of likelihood:"
+    warn "  1. Network Access in Atlas does not allow 0.0.0.0/0"
+    warn "  2. the password is wrong, or has unescaped special characters"
+    warn "  3. the database user has no read/write role"
+    read -r -p "  Continue anyway? Type yes: " ignore_conn
+    [[ "$ignore_conn" == "yes" ]] || fail "stopped — fix the connection and re-run"
+  fi
+else
+  warn "docker not available, skipping the connection test"
+fi
+
+umask 077
+printf '%s' "$MONGO_URI" > "$MONGO_URI_FILE"
+note "saved to deploy/azure/.mongo-uri (gitignored, 0600) for local deploys"
 
 # --------------------------------------------------------------------------
 # 4. GitHub OIDC federation — no stored password anywhere
@@ -255,22 +238,21 @@ RESOURCE_GROUP=$RESOURCE_GROUP
 ACR_NAME=$ACR_NAME
 GROUP_NAME=$GROUP_NAME
 DNS_LABEL=$DNS_LABEL
-COSMOS_ACCOUNT=$COSMOS_ACCOUNT
 LOCATION=$LOCATION
 EOF
 
 say "GitHub configuration"
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-  gh secret set AZURE_CLIENT_ID       --repo "$REPO_SLUG" --body "$APP_ID"  >/dev/null
+  gh secret set AZURE_CLIENT_ID       --repo "$REPO_SLUG" --body "$APP_ID"    >/dev/null
   gh secret set AZURE_TENANT_ID       --repo "$REPO_SLUG" --body "$TENANT_ID" >/dev/null
-  gh secret set AZURE_SUBSCRIPTION_ID --repo "$REPO_SLUG" --body "$SUB_ID"  >/dev/null
+  gh secret set AZURE_SUBSCRIPTION_ID --repo "$REPO_SLUG" --body "$SUB_ID"    >/dev/null
+  gh secret set MONGO_URI             --repo "$REPO_SLUG" --body "$MONGO_URI" >/dev/null
 
   gh variable set AZURE_RESOURCE_GROUP --repo "$REPO_SLUG" --body "$RESOURCE_GROUP" >/dev/null
   gh variable set AZURE_ACR_NAME       --repo "$REPO_SLUG" --body "$ACR_NAME"       >/dev/null
   gh variable set AZURE_LOCATION       --repo "$REPO_SLUG" --body "$LOCATION"       >/dev/null
   gh variable set ACI_GROUP_NAME       --repo "$REPO_SLUG" --body "$GROUP_NAME"     >/dev/null
   gh variable set ACI_DNS_LABEL        --repo "$REPO_SLUG" --body "$DNS_LABEL"      >/dev/null
-  gh variable set COSMOS_ACCOUNT       --repo "$REPO_SLUG" --body "$COSMOS_ACCOUNT" >/dev/null
   note "secrets and variables set on $REPO_SLUG"
 else
   warn "gh CLI not available or not authenticated — set these by hand:"
@@ -280,6 +262,7 @@ else
     AZURE_CLIENT_ID        $APP_ID
     AZURE_TENANT_ID        $TENANT_ID
     AZURE_SUBSCRIPTION_ID  $SUB_ID
+    MONGO_URI              (the Atlas connection string you pasted above)
 
   Repository variables (same page → Variables):
     AZURE_RESOURCE_GROUP   $RESOURCE_GROUP
@@ -287,7 +270,6 @@ else
     AZURE_LOCATION         $LOCATION
     ACI_GROUP_NAME         $GROUP_NAME
     ACI_DNS_LABEL          $DNS_LABEL
-    COSMOS_ACCOUNT         $COSMOS_ACCOUNT
 EOF
 fi
 
@@ -306,3 +288,5 @@ $(printf '\033[1m▸ Done.\033[0m')
   Portal → Cost Management → Budgets → Add. See deploy/azure/README.md.
 
 EOF
+
+unset MONGO_URI

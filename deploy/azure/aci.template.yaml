@@ -8,7 +8,8 @@
 # Every container in a group shares one network namespace, so services address
 # each other on 127.0.0.1 rather than by compose service name. That is the main
 # difference from docker-compose.yml. The other is storage: compose runs its own
-# MongoDB container, this uses Cosmos DB so the data survives a restart.
+# MongoDB container, this points at a MongoDB Atlas cluster outside Azure, so
+# the data survives the group being deleted and recreated on every deploy.
 
 apiVersion: "2021-10-01"
 location: __LOCATION__
@@ -36,8 +37,8 @@ properties:
 
   containers:
     # --- ingestion API -----------------------------------------------------
-    # No mongo container: storage is Cosmos DB, outside the group, so a
-    # redeploy (which always recreates the group) keeps its data.
+    # No mongo container: storage is a MongoDB Atlas cluster, outside the
+    # group, so a redeploy (which always recreates the group) keeps its data.
     - name: api
       properties:
         image: __ACR_SERVER__/team9-ingestion:__TAG__

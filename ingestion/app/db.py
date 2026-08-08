@@ -49,11 +49,12 @@ INDEXES = [
 def ensure_indexes(db) -> None:
     """Create indexes, tolerating a backend that refuses some of them.
 
-    Cosmos DB's Mongo API is not MongoDB. It rejects a unique index on a
-    collection that already holds data, and its index support differs in
-    places. A refused index should cost performance or de-duplication, not take
-    the whole API down — so each one is attempted independently and failures
-    are logged loudly rather than raised.
+    Real MongoDB accepts all of these. Hosted services that merely speak the
+    wire protocol do not always — Cosmos DB's Mongo API, for one, rejects a
+    unique index on a collection that already holds data. A refused index
+    should cost performance or de-duplication, not take the whole API down, so
+    each is attempted independently and failures are logged loudly rather than
+    raised.
 
     The connection itself still has to work: a genuine connectivity failure
     surfaces on the first attempt and propagates, which is what the caller's

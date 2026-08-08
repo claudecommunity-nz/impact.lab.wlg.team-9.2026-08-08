@@ -9,12 +9,16 @@
 #   ./deploy/azure/deploy.sh status   state and public URLs
 #   ./deploy/azure/deploy.sh logs     recent logs
 #   ./deploy/azure/deploy.sh stop     delete the container group, keep the data
-#   ./deploy/azure/deploy.sh destroy  delete everything including the database
+#   ./deploy/azure/deploy.sh destroy  delete the Azure resources
+#
+# The database is a MongoDB Atlas cluster, outside Azure. Nothing here can
+# delete it — that is done in the Atlas UI.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENV_FILE="$REPO_ROOT/deploy/azure/.azure-env"
+MONGO_URI_FILE="$REPO_ROOT/deploy/azure/.mongo-uri"
 GENERATED="$REPO_ROOT/deploy/azure/aci.generated.yaml"
 
 say()  { printf '\n\033[1m▸ %s\033[0m\n' "$*"; }
@@ -49,10 +53,14 @@ cmd_deploy() {
   ACR_SERVER="$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)"
   ACR_USERNAME="$(az acr credential show --name "$ACR_NAME" --query username -o tsv)"
   ACR_PASSWORD="$(az acr credential show --name "$ACR_NAME" --query 'passwords[0].value' -o tsv)"
-  MONGO_URI="$(az cosmosdb keys list \
-    --name "$COSMOS_ACCOUNT" --resource-group "$RESOURCE_GROUP" \
-    --type connection-strings \
-    --query 'connectionStrings[0].connectionString' -o tsv)"
+
+  # The database is Atlas, outside Azure, so this comes from the file bootstrap
+  # wrote rather than from az.
+  if [[ -z "${MONGO_URI:-}" ]]; then
+    [[ -f "$MONGO_URI_FILE" ]] \
+      || fail "no $MONGO_URI_FILE — re-run ./deploy/azure/bootstrap.sh, or set MONGO_URI"
+    MONGO_URI="$(cat "$MONGO_URI_FILE")"
+  fi
   export ACR_SERVER ACR_USERNAME ACR_PASSWORD MONGO_URI
 
   "$REPO_ROOT/deploy/azure/render-aci.sh" > "$GENERATED"
@@ -63,7 +71,7 @@ cmd_deploy() {
   say "Wrote $GENERATED — contains live credentials. Gitignored; keep it that way."
 
   # ACI cannot update a running group in place; replace it. The data is in
-  # Cosmos, outside the group, so this costs nothing but a minute of downtime.
+  # Atlas, outside the group, so this costs nothing but a minute of downtime.
   if az container show --resource-group "$RESOURCE_GROUP" --name "$GROUP_NAME" >/dev/null 2>&1; then
     say "Removing the previous container group"
     az container delete --resource-group "$RESOURCE_GROUP" --name "$GROUP_NAME" --yes --output none
@@ -110,13 +118,14 @@ cmd_logs() {
 }
 
 cmd_stop() {
-  say "Deleting the container group (Cosmos DB and its data stay)"
+  say "Deleting the container group (the Atlas database and its data stay)"
   az container delete --resource-group "$RESOURCE_GROUP" --name "$GROUP_NAME" --yes --output none
   say "Stopped. Compute billing ends here; redeploy with: $0"
 }
 
 cmd_destroy() {
-  say "This deletes $RESOURCE_GROUP and everything in it, including the database."
+  say "This deletes $RESOURCE_GROUP and everything in it."
+  say "The Atlas cluster is not touched — delete that in the Atlas UI if you want it gone."
   read -r -p "Type the resource group name to confirm: " confirm
   [[ "$confirm" == "$RESOURCE_GROUP" ]] || fail "stopped"
   az group delete --name "$RESOURCE_GROUP" --yes --no-wait
