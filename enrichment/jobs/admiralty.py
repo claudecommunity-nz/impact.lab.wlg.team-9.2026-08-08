@@ -46,6 +46,10 @@ def source_reliability(source: dict) -> tuple[str, str]:
 
     if stype == "geonet":
         return "A", "source type 'geonet' → A"
+    elif stype == "welectricity":
+        return "A", "source type 'welectricity' → A"
+    elif stype == "nzta":
+        return "A", "source type 'nzta' → A"
     elif stype == "mastodon":
         return "F", "source type 'mastodon' → F"
     elif stype == "fixtures":
@@ -62,6 +66,11 @@ def source_reliability(source: dict) -> tuple[str, str]:
         ("geonet", "A"),
         ("civil defence", "A"),
         ("nema", "A"),
+        ("wellington electricity", "A"),
+        ("waka kotahi", "A"),
+        ("nzta", "A"),
+        ("transpower", "A"),
+        ("wellington water", "A"),
         ("rnz", "B"),
         ("nz herald", "B"),
         ("the post", "B"),

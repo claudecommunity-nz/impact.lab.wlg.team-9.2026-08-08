@@ -59,6 +59,7 @@ services:
       INGESTION_URL: http://api:8000
       SOURCES: rss
       SCRAPE_INTERVAL_SECONDS: ${RSS_INTERVAL:-600}
+      USER_AGENT: ${USER_AGENT:-Mozilla/5.0 (compatible; impact-lab-team9 hackathon)}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
   scraper-geonet:
@@ -86,6 +87,24 @@ services:
       INGESTION_URL: http://api:8000
       SOURCES: fixtures
       RUN_ONCE: "true"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+  # Official operator feeds — A-grade corroboration sources. Both are the
+  # undocumented backends of public status maps: poll gently, label as indicative.
+  scraper-welectricity:
+    <<: *scraper
+    environment:
+      INGESTION_URL: http://api:8000
+      SOURCES: welectricity
+      SCRAPE_INTERVAL_SECONDS: ${WELECTRICITY_INTERVAL:-120}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+  scraper-nzta:
+    <<: *scraper
+    environment:
+      INGESTION_URL: http://api:8000
+      SOURCES: nzta
+      SCRAPE_INTERVAL_SECONDS: ${NZTA_INTERVAL:-120}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
   # ---- enrichment: scheduled jobs over the signal store --------------------

@@ -25,11 +25,12 @@ DEFAULT_FEEDS = [
     ("MetService Severe Weather Warnings", "https://alerts.metservice.com/cap/rss", False),
     ("Wellington.Scoop", "https://wellington.scoop.co.nz/?feed=rss2", True),
     ("NZ Herald — New Zealand", "https://www.nzherald.co.nz/arc/outboundfeeds/rss/section/nz/?outputType=xml", False),
+    ("NZ Police — Wellington District", "https://www.police.govt.nz/rss/district-news/wellington", True),
 ]
 
 USER_AGENT = os.getenv(
     "USER_AGENT",
-    "impact-lab-team9/0.1 (Wellington emergency signals prototype; hackathon)",
+    "Mozilla/5.0 (compatible; impact-lab-team9 hackathon)",
 )
 
 
