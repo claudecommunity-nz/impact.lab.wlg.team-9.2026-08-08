@@ -67,6 +67,16 @@ properties:
             value: signals
           - name: LOG_LEVEL
             value: INFO
+          #<<<SCREENSHOTS
+          # Serves a stored screenshot back to the review page. The image goes
+          # through the API rather than being linked directly so this token —
+          # a read credential for the container — never reaches a public
+          # response body.
+          - name: SCREENSHOT_BLOB_URL
+            value: "__SCREENSHOT_BLOB_URL__"
+          - name: SCREENSHOT_BLOB_SAS
+            secureValue: "__SCREENSHOT_BLOB_SAS__"
+          #>>>SCREENSHOTS
         resources:
           requests:
             cpu: 0.5
@@ -112,6 +122,41 @@ properties:
           requests:
             cpu: 0.5
             memoryInGB: 1.0
+
+    #<<<SCREENSHOTS
+    # --- screenshot intake -------------------------------------------------
+    # Its own container rather than a source in the one above, because the
+    # useful interval is 20 seconds and that one polls every 10 minutes: a
+    # screenshot someone shares during an event is worth nothing ten minutes
+    # later. Rendered out entirely when there is no vision key.
+    #
+    # The inbox is an Azure Blob container, not a directory. A container
+    # group's filesystem is rebuilt on every deploy and nobody outside the
+    # container can write to it, so a local inbox here would be an inbox
+    # nobody can reach that loses its contents on the next push to main.
+    - name: scraper-screenshots
+      properties:
+        image: "__ACR_SERVER__/team9-scrapers:__TAG__"
+        environmentVariables:
+          - name: INGESTION_URL
+            value: http://127.0.0.1:8000
+          - name: SOURCES
+            value: screenshots
+          - name: SCRAPE_INTERVAL_SECONDS
+            value: "20"
+          - name: SCREENSHOT_BLOB_URL
+            value: "__SCREENSHOT_BLOB_URL__"
+          - name: SCREENSHOT_BLOB_SAS
+            secureValue: "__SCREENSHOT_BLOB_SAS__"
+          - name: ANTHROPIC_API_KEY
+            secureValue: "__ANTHROPIC_API_KEY__"
+          - name: LOG_LEVEL
+            value: INFO
+        resources:
+          requests:
+            cpu: 0.5
+            memoryInGB: 1.0
+    #>>>SCREENSHOTS
 
     # --- enrichment --------------------------------------------------------
     - name: enrichment

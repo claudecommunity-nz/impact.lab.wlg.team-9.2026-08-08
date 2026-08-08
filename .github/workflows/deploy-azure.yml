@@ -138,6 +138,39 @@ jobs:
           echo "STORAGE_KEY=$STORAGE_KEY" >> "$GITHUB_ENV"
           echo "STORAGE_ACCOUNT=${{ vars.AZURE_STORAGE_ACCOUNT }}" >> "$GITHUB_ENV"
 
+      # Optional. Absent, the render step drops the screenshot collector from
+      # the container group and everything else deploys as normal — a missing
+      # key should cost one collector, not the site.
+      - name: Read the vision key from Key Vault
+        run: |
+          ANTHROPIC_API_KEY="$(az keyvault secret show \
+            --vault-name '${{ vars.AZURE_KEY_VAULT_NAME }}' \
+            --name anthropic-api-key --query value -o tsv 2>/dev/null || true)"
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::warning::No 'anthropic-api-key' in Key Vault — the screenshot intake will not be deployed. Add one with ./deploy/azure/deploy.sh secret anthropic-api-key."
+          else
+            echo "::add-mask::$ANTHROPIC_API_KEY"
+          fi
+          echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" >> "$GITHUB_ENV"
+
+      # A container-scoped SAS, minted per deploy rather than stored. It is
+      # the only thing that opens the screenshot container, and it is held by
+      # the API and the collector — never handed to a browser.
+      - name: Mint a SAS for the screenshot container
+        run: |
+          EXPIRY="$(date -u -d '+30 days' '+%Y-%m-%dT%H:%MZ')"
+          SAS="$(az storage container generate-sas \
+            --name screenshots \
+            --account-name '${{ vars.AZURE_STORAGE_ACCOUNT }}' \
+            --account-key "$STORAGE_KEY" \
+            --permissions racwdl \
+            --expiry "$EXPIRY" \
+            --https-only \
+            -o tsv)"
+          echo "::add-mask::$SAS"
+          echo "SCREENSHOT_BLOB_SAS=$SAS" >> "$GITHUB_ENV"
+          echo "SCREENSHOT_BLOB_URL=https://${{ vars.AZURE_STORAGE_ACCOUNT }}.blob.core.windows.net/screenshots" >> "$GITHUB_ENV"
+
       - name: Render the container group definition
         env:
           LOCATION: ${{ vars.AZURE_LOCATION }}
@@ -230,6 +263,14 @@ jobs:
             echo "Checking the API through HTTPS..."
             curl -sf --max-time 20 "https://$FQDN/api/stats" -o /dev/null \
               || { echo "::error::API not reachable through the HTTPS origin"; exit 1; }
+          fi
+
+          if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "Checking the screenshot route answers (404 for an unknown image is the healthy case)..."
+            CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+              "http://$FQDN:8000/screenshots/$(printf 'a%.0s' $(seq 40)).png")"
+            [ "$CODE" = "404" ] \
+              || { echo "::error::/screenshots returned $CODE, expected 404 — the route is not wired up"; exit 1; }
           fi
 
           echo "Checking GeoJSON endpoints are valid JSON..."

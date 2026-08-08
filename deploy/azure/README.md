@@ -111,6 +111,7 @@ up, not that `az` returned zero. URLs land in the run summary.
 ./deploy/azure/deploy.sh logs api  # follow one container
 ./deploy/azure/deploy.sh           # deploy uncommitted local changes
 ./deploy/azure/deploy.sh rotate    # replace the database connection string
+./deploy/azure/deploy.sh secret anthropic-api-key   # the screenshot intake's vision key
 ./deploy/azure/deploy.sh stop      # delete the group, keep the data — stops compute billing
 ./deploy/azure/deploy.sh destroy   # delete the Azure resources
 ```
@@ -123,6 +124,8 @@ it gone.
 | | Stored where | Notes |
 |---|---|---|
 | Atlas connection string | **Azure Key Vault**, secret `mongo-uri` | The only copy. Never written to disk, never a GitHub secret |
+| Anthropic API key (screenshot intake) | **Azure Key Vault**, secret `anthropic-api-key` | Optional. Absent, the screenshot collector is left out of the deploy and everything else runs |
+| Screenshot container SAS | Nowhere persistent | Minted per deploy, 30 days, scoped to that one container |
 | Registry password | Nowhere persistent | Fetched fresh from `az acr credential show` each deploy |
 | Azure deploy credential | **Nowhere** | OIDC mints a short-lived token per workflow run |
 | Azure client / tenant / subscription IDs | GitHub repo secrets | Identifiers, not credentials — useless without the OIDC federation |
@@ -155,6 +158,45 @@ The rendered container-group definition holds both the registry password and
 the connection string in plaintext. It is written to a `0600` file in a temp
 directory and deleted when the script exits, including on interrupt — it is no
 longer left in the repo as `aci.generated.yaml`.
+
+## Sharing a screenshot into the running deployment
+
+The screenshot intake reads an Azure Blob container, not a folder. A container
+group's filesystem is rebuilt on every deploy and nothing outside the container
+can write to it, so a local inbox in Azure would be an inbox nobody can reach
+that loses its contents on the next push to main.
+
+Drop an image into `inbox/` and the collector picks it up within 20 seconds:
+
+```bash
+az storage blob upload \
+  --account-name "$(grep STORAGE_ACCOUNT deploy/azure/.azure-env | cut -d= -f2)" \
+  --container-name screenshots \
+  --name "inbox/$(basename shot.png)" \
+  --file shot.png \
+  --auth-mode login
+```
+
+Or in the portal: **Storage account → Containers → screenshots → inbox →
+Upload**, which is drag-and-drop and is what to use during a demo.
+
+The collector then moves each image out of `inbox/` as it deals with it, so
+what is left there is exactly what hasn't been looked at:
+
+| Folder | What's in it |
+|---|---|
+| `inbox/` | Waiting to be read |
+| `processed/` | Read successfully, stored under the sha1 of its own bytes. The review page loads these back |
+| `skipped/` | Not a social media post |
+| `failed/` | Could not be read — a refusal, a timeout, or an unreadable image |
+
+**The stored images are not redacted.** The signal's *text* has handles
+stripped and the extraction prompt forbids naming anyone, but the picture still
+shows whatever was on screen when it was taken, including the poster's name and
+profile photo. That is why the container is private, why the image is served
+through the API rather than by a public URL, and why the review page blurs it
+until a reviewer asks to see it. Treat the container as holding other people's
+personal information, because it does.
 
 ## HTTPS
 

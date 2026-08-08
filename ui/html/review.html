@@ -125,6 +125,30 @@ main { padding: 16px; max-width: 1100px; margin: 0 auto; }
 }
 .card-media { width: 100%; aspect-ratio: 16/10; background: var(--surface-2); display: block; }
 .card-media img, .card-media video { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* An unredacted screenshot: the poster's name and profile photo are still in
+   the picture even though they were stripped out of the signal's text. It is
+   blurred until a reviewer asks for it, and it says why. */
+.card-media.unredacted { position: relative; }
+.card-media.unredacted img { filter: blur(18px); transform: scale(1.06); }
+.card-media.unredacted.revealed img { filter: none; transform: none; }
+.reveal {
+  position: absolute; inset: 0; width: 100%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; padding: 12px; text-align: center; cursor: pointer;
+  border: 0; background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  color: var(--text); font: inherit; font-size: 12px; line-height: 1.4;
+}
+.card-media.unredacted.revealed .reveal { display: none; }
+.reveal strong { font-size: 13px; }
+.reveal span { max-width: 34ch; opacity: .8; }
+.rehide {
+  position: absolute; top: 8px; right: 8px; display: none;
+  border: 0; border-radius: 4px; padding: 4px 8px; cursor: pointer;
+  background: color-mix(in srgb, var(--surface-2) 85%, transparent);
+  color: var(--text); font: inherit; font-size: 11px;
+}
+.card-media.unredacted.revealed .rehide { display: block; }
 .card-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
 
 .card-meta { display: flex; flex-wrap: wrap; gap: 5px 8px; font-size: 11.5px; color: var(--text-muted); align-items: center; }
@@ -195,6 +219,7 @@ main { padding: 16px; max-width: 1100px; margin: 0 auto; }
   <label><input type="checkbox" id="f-mastodon" checked> Mastodon</label>
   <label><input type="checkbox" id="f-rss" checked> RSS / news</label>
   <label><input type="checkbox" id="f-citizen" checked> Public reports</label>
+  <label><input type="checkbox" id="f-screenshot" checked> Shared screenshots</label>
   <label>Time
     <select id="f-since">
       <option value="6h">Last 6 hours</option>
@@ -259,16 +284,46 @@ function sourceTypes() {
   if (document.getElementById("f-mastodon").checked) types.push("mastodon");
   if (document.getElementById("f-rss").checked) types.push("rss");
   if (document.getElementById("f-citizen").checked) types.push("citizen_report");
+  if (document.getElementById("f-screenshot").checked) types.push("screenshot");
   return types;
 }
 
-function mediaBlock(media) {
+// Publisher media carries an absolute URL and loads straight from the
+// publisher. A screenshot we stored ourselves carries a path, which resolves
+// against the API — through nginx here, or the API's own port for anyone
+// reading /signals directly.
+function mediaSrc(url) {
+  return url.startsWith("/") ? API + url : url;
+}
+
+function mediaBlock(s) {
+  const media = s.media;
   if (!media || !media.length) return "";
   const m = media[0];
-  const el = m.type === "video"
-    ? `<video src="${m.url}" muted playsinline controls preload="metadata"></video>`
-    : `<img src="${m.url}" alt="" loading="lazy">`;
-  return `<div class="card-media">${el}</div>`;
+  const src = mediaSrc(m.url);
+
+  if (m.type === "video") {
+    return `<div class="card-media"><video src="${src}" muted playsinline controls
+      preload="metadata"></video></div>`;
+  }
+
+  // A screenshot is the one kind of image here that was never redacted: the
+  // signal's text has had handles stripped, but the picture still shows
+  // whatever was on screen. Don't put that in front of someone who didn't
+  // ask for it, and don't pretend it isn't there either.
+  if (s.raw && s.raw.screenshot_unredacted) {
+    return `<div class="card-media unredacted">
+      <img src="${src}" alt="Shared screenshot, blurred" loading="lazy">
+      <button class="reveal" type="button" data-action="reveal">
+        <strong>Screenshot hidden</strong>
+        <span>Not redacted &mdash; it may show the poster's name and photo.
+          Click to view for verification.</span>
+      </button>
+      <button class="rehide" type="button" data-action="hide">Hide</button>
+    </div>`;
+  }
+
+  return `<div class="card-media"><img src="${src}" alt="" loading="lazy"></div>`;
 }
 
 function renderCard(s) {
@@ -276,7 +331,7 @@ function renderCard(s) {
   const geo = (s.enrichment && s.enrichment.geolocate) || {};
   const text = s.text.length > 220 ? s.text.slice(0, 220).trim() + "…" : s.text;
   return `<div class="card" data-id="${s.signal_id}">
-    ${mediaBlock(s.media)}
+    ${mediaBlock(s)}
     <div class="card-body">
       <div class="card-meta">
         <span>${esc(s.source.name)}</span>
@@ -334,6 +389,14 @@ async function refresh() {
       grid.querySelectorAll(".actions button").forEach((btn) =>
         btn.addEventListener("click", () => act(btn.closest(".card").dataset.id, btn.dataset.action, btn))
       );
+      // Revealing is per card and never sticky: the next refresh re-blurs
+      // every screenshot, so an unattended screen doesn't sit there showing
+      // someone's name and face.
+      grid.querySelectorAll(".card-media button").forEach((btn) =>
+        btn.addEventListener("click", () =>
+          btn.closest(".card-media").classList.toggle("revealed", btn.dataset.action === "reveal")
+        )
+      );
     }
     updateQueueCount();
     document.getElementById("refresh-note").textContent =
@@ -343,7 +406,7 @@ async function refresh() {
   }
 }
 
-["f-mastodon", "f-rss", "f-since"].forEach((id) =>
+["f-mastodon", "f-rss", "f-citizen", "f-screenshot", "f-since"].forEach((id) =>
   document.getElementById(id).addEventListener("change", refresh)
 );
 

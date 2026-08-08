@@ -45,8 +45,14 @@ source "$ENV_FILE"
   || fail "$ENV_FILE predates the HTTPS change — re-run ./deploy/azure/bootstrap.sh to add the certificate storage"
 SECRET_NAME="${SECRET_NAME:-mongo-uri}"
 REDDIT_SECRET_NAME="${REDDIT_SECRET_NAME:-reddit-api-key}"
+ANTHROPIC_SECRET_NAME="${ANTHROPIC_SECRET_NAME:-anthropic-api-key}"
 
 TAG="${TAG:-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo latest)}"
+
+sas_expiry() {
+  date -u -d '+30 days' '+%Y-%m-%dT%H:%MZ' 2>/dev/null \
+    || date -u -v+30d '+%Y-%m-%dT%H:%MZ'
+}
 
 cmd_deploy() {
   say "Subscription: $(az account show --query name -o tsv)"
@@ -93,7 +99,28 @@ cmd_deploy() {
     say "Add it with:  $0 secret $REDDIT_SECRET_NAME"
   fi
 
+  # Optional. Absent, render-aci.sh leaves the screenshot collector out of the
+  # container group and everything else deploys unchanged.
+  ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-$(az keyvault secret show \
+    --vault-name "$KEY_VAULT_NAME" --name "$ANTHROPIC_SECRET_NAME" \
+    --query value -o tsv 2>/dev/null || true)}"
+  if [[ -z "$ANTHROPIC_API_KEY" ]]; then
+    say "No '$ANTHROPIC_SECRET_NAME' in the vault — the screenshot intake will not be deployed"
+    say "Add it with:  $0 secret $ANTHROPIC_SECRET_NAME"
+  fi
+
+  # Minted per deploy rather than stored: a 30-day container-scoped SAS is the
+  # only thing that opens the screenshot container, and it is held by the API
+  # and the collector, never handed to a browser.
+  SCREENSHOT_BLOB_URL="https://${STORAGE_ACCOUNT}.blob.core.windows.net/screenshots"
+  SCREENSHOT_BLOB_SAS="$(az storage container generate-sas \
+    --name screenshots --account-name "$STORAGE_ACCOUNT" --account-key "$STORAGE_KEY" \
+    --permissions racwdl --expiry "$(sas_expiry)" --https-only -o tsv 2>/dev/null || true)"
+  [[ -n "$SCREENSHOT_BLOB_SAS" ]] \
+    || say "Could not mint a SAS for the 'screenshots' container — re-run bootstrap.sh"
+
   export ACR_SERVER ACR_USERNAME ACR_PASSWORD MONGO_URI STORAGE_ACCOUNT STORAGE_KEY REDDIT_API_KEY
+  export ANTHROPIC_API_KEY SCREENSHOT_BLOB_URL SCREENSHOT_BLOB_SAS
 
   # The rendered file carries the registry password and the connection string
   # in plaintext, so it is created 0600 in a temp dir and removed on the way
