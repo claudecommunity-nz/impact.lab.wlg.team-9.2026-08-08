@@ -47,10 +47,26 @@ QUERIES = [
     ).split(",") if q.strip()
 ]
 
-SUBREDDITS = [s.strip() for s in os.getenv("REDDIT_SUBREDDITS", "").split(",") if s.strip()]
+# The corpus covers 25 subreddits including Auckland and Christchurch. Narrowed
+# here rather than filtered later, so the request does the work instead of the
+# relevance filter throwing most of it away.
+SUBREDDITS = [
+    s.strip() for s in os.getenv("REDDIT_SUBREDDITS", "wellington,newzealand").split(",") if s.strip()
+]
+
+# post | comment | all. Comments outnumber posts roughly six to one and carry
+# most of the on-the-ground detail — "water over the road at X" is usually a
+# reply, not a submission — so they are worth having.
+KIND = os.getenv("REDDIT_KIND", "all")
+
 WINDOW_MINUTES = int(os.getenv("REDDIT_WINDOW_MINUTES", "60"))
 LIMIT = int(os.getenv("REDDIT_LIMIT", "50"))
 TIMEOUT = int(os.getenv("REDDIT_TIMEOUT", "30"))
+
+# Subreddits that are inherently Wellington. A post in r/wellington saying
+# "big slip on the road" has no place name in it and would otherwise be thrown
+# away by the region-term half of the relevance filter.
+LOCAL_SUBREDDITS = {"wellington"}
 
 
 def describe() -> dict:
@@ -73,8 +89,10 @@ def describe() -> dict:
 def _search(query: str, start, end) -> list[dict]:
     params = {
         "q": query,
-        "start": start.isoformat().replace("+00:00", "Z"),
-        "end": end.isoformat().replace("+00:00", "Z"),
+        "kind": KIND,
+        # The API takes naive timestamps; it rejects the trailing Z.
+        "start": start.replace(tzinfo=None).isoformat(timespec="seconds"),
+        "end": end.replace(tzinfo=None).isoformat(timespec="seconds"),
         "limit": LIMIT,
         "sort": "new",
     }
@@ -88,44 +106,32 @@ def _search(query: str, start, end) -> list[dict]:
         timeout=TIMEOUT,
     )
     r.raise_for_status()
-    payload = r.json()
-
-    # The endpoint may return a bare list or wrap it; accept either rather than
-    # depending on which.
-    if isinstance(payload, dict):
-        for key in ("results", "items", "posts", "data", "hits"):
-            if isinstance(payload.get(key), list):
-                return payload[key]
-        return []
-    return payload if isinstance(payload, list) else []
-
-
-def _field(item: dict, *names, default=None):
-    for n in names:
-        if item.get(n) not in (None, ""):
-            return item[n]
-    return default
+    return r.json().get("items", [])
 
 
 def map_post(item: dict) -> dict | None:
-    """Turn one corpus record into a signal."""
+    """Turn one corpus record into a signal.
+
+    Field names are the API's actual ones, confirmed against a live response:
+    id, kind, subreddit, created_at, title, text, permalink, score. Comments
+    carry an empty title, which is why the two are joined rather than assumed.
+    """
     from common import simclock
 
-    body = clean_text(_field(item, "selftext", "body", "text", "content", default=""))
-    title = clean_text(_field(item, "title", default=""))
-    text = f"{title}. {body}".strip(". ").strip() or title or body
+    title = clean_text(item.get("title") or "")
+    body = clean_text(item.get("text") or "")
+    text = f"{title}. {body}".strip(". ").strip()
     if not text:
         return None
 
-    keep, reasons = looks_relevant(text, local=False)
+    subreddit = (item.get("subreddit") or "unknown").lower()
+    keep, reasons = looks_relevant(text, local=subreddit in LOCAL_SUBREDDITS)
     if not keep:
         return None
 
-    corpus_time = parse_time(
-        _field(item, "created_utc", "created_at", "created", "timestamp", "date")
-    )
-    subreddit = _field(item, "subreddit", "sub", default="unknown")
-    post_id = _field(item, "id", "post_id", "name", default=None)
+    # Naive timestamps in the corpus; Reddit records UTC, so read them as UTC.
+    corpus_time = parse_time(item.get("created_at"))
+    post_id = item.get("id")
 
     return {
         "source": {
@@ -139,7 +145,7 @@ def map_post(item: dict) -> dict | None:
         },
         "title": title or None,
         "text": text,
-        "url": _field(item, "url", "permalink", "link"),
+        "url": item.get("permalink"),
         "external_id": f"reddit-{post_id}" if post_id else None,
         # Mapped onto the real clock so it behaves like a live signal in the
         # map's time filters. The true corpus time is kept below.
@@ -149,8 +155,8 @@ def map_post(item: dict) -> dict | None:
             "note": "Replayed from a synthetic Reddit corpus on a shifted clock. Not a live post.",
             "corpus_published_at": corpus_time.isoformat() if corpus_time else None,
             "subreddit": subreddit,
-            "score": _field(item, "score", "ups"),
-            "num_comments": _field(item, "num_comments", "comments"),
+            "kind": item.get("kind"),
+            "score": item.get("score"),
             "filter": reasons,
         },
     }
@@ -185,7 +191,9 @@ def collect() -> list[dict]:
 
         kept = 0
         for item in items:
-            key = _field(item, "id", "post_id", "permalink", "url")
+            # Terms overlap heavily — a flood post matches "flood", "rain" and
+            # "water" — so the same item comes back from several queries.
+            key = item.get("id")
             if key and key in seen:
                 continue
             if key:
