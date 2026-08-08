@@ -110,3 +110,29 @@ def test_stamp_metadata():
     assert stamp["version"] == "admiralty-v1"
     assert isinstance(stamp["rationale"], list)
     assert len(stamp["rationale"]) > 0
+
+def test_welectricity_source_reliability_is_A():
+    rel, _ = source_reliability({"type": "welectricity", "name": "Wellington Electricity"})
+    assert rel == "A"
+
+def test_nzta_source_reliability_is_A():
+    rel, _ = source_reliability({"type": "nzta", "name": "Waka Kotahi NZTA (Journeys)"})
+    assert rel == "A"
+
+def test_police_rss_source_reliability_is_A():
+    rel, _ = source_reliability({"type": "rss", "name": "NZ Police — Wellington District"})
+    assert rel == "A"
+
+def test_transpower_rss_source_reliability_is_A():
+    rel, _ = source_reliability({"type": "rss", "name": "Transpower"})
+    assert rel == "A"
+
+def test_welectricity_signal_grading_A3():
+    doc = {
+        "signal_id": "sig-welec-1",
+        "source": {"type": "welectricity", "name": "Wellington Electricity"},
+    }
+    stamp = grade_signal(doc)
+    assert stamp["grade"] == "A3"
+    assert stamp["source_reliability"] == "A"
+    assert stamp["info_credibility"] == 3
