@@ -21,35 +21,53 @@ What was removed, and nothing else: the workflow was disabled, and the three
 repository **secrets** (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
 `AZURE_SUBSCRIPTION_ID`) were deleted.
 
-The eight repository **variables** were deliberately kept — they are resource
-names rather than credentials, and they are what the workflow needs to find the
-existing deployment rather than build a second one:
+The eight repository **variables** were kept, but the six that named the
+original environment have been replaced with placeholders, because that
+environment is not coming back:
 
-```
-ACI_DNS_LABEL  ACI_GROUP_NAME  AZURE_ACR_NAME  AZURE_KEY_VAULT_NAME
-AZURE_LOCATION  AZURE_RESOURCE_GROUP  AZURE_STORAGE_ACCOUNT  MONGO_SECRET_NAME
-```
+| Variable | Value | |
+|---|---|---|
+| `AZURE_RESOURCE_GROUP` | `replace-me-rg` | placeholder |
+| `AZURE_ACR_NAME` | `replacemeacr` | placeholder |
+| `AZURE_KEY_VAULT_NAME` | `replace-me-kv` | placeholder |
+| `AZURE_STORAGE_ACCOUNT` | `replacemest` | placeholder |
+| `ACI_GROUP_NAME` | `replace-me-container-group` | placeholder |
+| `ACI_DNS_LABEL` | `replace-me-dns-label` | placeholder |
+| `AZURE_LOCATION` | `australiaeast` | real, and the right default for Wellington |
+| `MONGO_SECRET_NAME` | `mongo-uri` | real, and what `bootstrap.sh` defaults to |
 
-Also untouched: everything in Azure, everything in Key Vault, and the Entra app
-registration with its GitHub OIDC federation. So turning it back on is short.
+They are kept rather than deleted because their *names* are the contract
+between the workflow and the infrastructure — the list above is what a fresh
+deployment has to provide, and an empty settings page does not say that.
 
-**If the Azure resources still exist** — re-running the bootstrap recreates the
-three secrets from what is already there and changes nothing else:
+The placeholder values are deliberately still valid for their type: ACR names
+are alphanumeric only, storage accounts are lowercase alphanumeric and at most
+24 characters, and a Key Vault name must start with a letter. A placeholder
+that breaks the naming rules would teach the wrong shape.
+
+**You do not have to fill them in by hand.** `bootstrap.sh` overwrites all of
+them with the real names of whatever it creates or adopts. And if the workflow
+is enabled while they are still placeholders, it fails against a resource group
+that does not exist rather than touching anything real.
+
+**Turning it back on**, from nothing:
 
 ```bash
-az login                              # the account that hosts the deployment
-./deploy/azure/bootstrap.sh           # adopts what exists; will not duplicate
+az login                              # the account that will host it
+./deploy/azure/bootstrap.sh           # creates everything, sets the variables
 gh workflow enable deploy-azure.yml
 ```
 
-The bootstrap reads the database connection string back out of Key Vault, so it
-will not ask you for it. It is safe to re-run.
+The bootstrap creates the resource group, registry, Key Vault, certificate
+storage, app registration and OIDC federation, then writes the three secrets
+and the eight variables. It will ask for the MongoDB Atlas connection string,
+so have an Atlas cluster ready — see step 1 above.
 
-**If the resource group has been deleted**, the same command rebuilds
-everything from nothing — registry, Key Vault, storage, app registration,
-federated credentials — and prints what it made. You will need the Atlas
-connection string again, and you will want to check the Atlas cluster still
-exists, since `deploy.sh destroy` never touched it.
+**If a deployment does still exist** and you are pointing at its subscription,
+the same command adopts it rather than duplicating it: it reuses a container
+registry already in the resource group, derives the other names from it, and
+reads the connection string back out of Key Vault instead of asking. Safe to
+re-run.
 
 **To confirm it is back on:**
 

@@ -65,12 +65,14 @@ export REDDIT_API_KEY="paste-the-key"
 docker compose up -d scraper-reddit
 ```
 
-If you have access to the team's Azure Key Vault, take it from there rather
-than keeping a copy on disk:
+If a deployment of this exists and you have access to its Azure Key Vault, take
+the key from there rather than keeping a copy on disk. The vault's name is in
+`deploy/azure/.azure-env`, which `bootstrap.sh` writes and which is gitignored:
 
 ```bash
+source deploy/azure/.azure-env
 export REDDIT_API_KEY="$(az keyvault secret show \
-  --vault-name team9-kv-f76f44cb --name reddit-api-key --query value -o tsv)"
+  --vault-name "$KEY_VAULT_NAME" --name reddit-api-key --query value -o tsv)"
 ```
 
 **The fixture collector** needs nothing and is local-only. It replays synthetic
