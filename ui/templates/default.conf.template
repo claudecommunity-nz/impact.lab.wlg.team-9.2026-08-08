@@ -1,5 +1,7 @@
 server {
-    listen 80;
+    # 80 under compose, where nginx is the only thing here. In Azure it moves
+    # to 8080 so Caddy can hold 80 and 443 for TLS and the ACME challenge.
+    listen ${UI_LISTEN_PORT};
     server_name _;
 
     root /usr/share/nginx/html;

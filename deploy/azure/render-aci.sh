@@ -7,13 +7,21 @@
 #
 # Required in the environment:
 #   LOCATION GROUP_NAME DNS_LABEL ACR_SERVER ACR_USERNAME ACR_PASSWORD
-#   TAG MONGO_URI DEPLOY_SOURCE
+#   TAG MONGO_URI DEPLOY_SOURCE STORAGE_ACCOUNT STORAGE_KEY
+#
+# FQDN is derived from DNS_LABEL and LOCATION unless set explicitly.
 
 set -euo pipefail
 
 TEMPLATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/aci.template.yaml"
 
-for var in LOCATION GROUP_NAME DNS_LABEL ACR_SERVER ACR_USERNAME ACR_PASSWORD TAG MONGO_URI DEPLOY_SOURCE; do
+# The public hostname Caddy requests a certificate for. Derived rather than
+# configured: it is whatever the DNS label and region already imply, and a
+# mismatch here means ACME fails for a name nobody can reach.
+export FQDN="${FQDN:-${DNS_LABEL}.${LOCATION}.azurecontainer.io}"
+
+for var in LOCATION GROUP_NAME DNS_LABEL ACR_SERVER ACR_USERNAME ACR_PASSWORD \
+           TAG MONGO_URI DEPLOY_SOURCE FQDN STORAGE_ACCOUNT STORAGE_KEY; do
   if [[ -z "${!var:-}" ]]; then
     echo "render-aci.sh: $var is not set" >&2
     exit 1
@@ -28,7 +36,8 @@ import os
 
 placeholders = [
     "LOCATION", "GROUP_NAME", "DNS_LABEL", "ACR_SERVER", "ACR_USERNAME",
-    "ACR_PASSWORD", "TAG", "MONGO_URI", "DEPLOY_SOURCE",
+    "ACR_PASSWORD", "TAG", "MONGO_URI", "DEPLOY_SOURCE", "FQDN",
+    "STORAGE_ACCOUNT", "STORAGE_KEY",
 ]
 
 with open(os.environ["TEMPLATE_PATH"]) as fh:

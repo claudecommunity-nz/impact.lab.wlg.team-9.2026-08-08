@@ -106,6 +106,21 @@ jobs:
             echo "ACR_USERNAME=$(az acr credential show --name '${{ vars.AZURE_ACR_NAME }}' --query username -o tsv)"
           } >> "$GITHUB_ENV"
 
+      # Backs the Azure Files share Caddy keeps its certificates on, so a
+      # deploy does not throw away a working certificate and ask for another.
+      - name: Read the storage key
+        run: |
+          if ! STORAGE_KEY="$(az storage account keys list \
+                --account-name '${{ vars.AZURE_STORAGE_ACCOUNT }}' \
+                --resource-group '${{ vars.AZURE_RESOURCE_GROUP }}' \
+                --query '[0].value' -o tsv 2>&1)"; then
+            echo "::error::Could not read the key for storage account '${{ vars.AZURE_STORAGE_ACCOUNT }}'. Re-run deploy/azure/bootstrap.sh to create it."
+            exit 1
+          fi
+          echo "::add-mask::$STORAGE_KEY"
+          echo "STORAGE_KEY=$STORAGE_KEY" >> "$GITHUB_ENV"
+          echo "STORAGE_ACCOUNT=${{ vars.AZURE_STORAGE_ACCOUNT }}" >> "$GITHUB_ENV"
+
       - name: Render the container group definition
         env:
           LOCATION: ${{ vars.AZURE_LOCATION }}
@@ -144,8 +159,8 @@ jobs:
             --resource-group '${{ vars.AZURE_RESOURCE_GROUP }}' \
             --name '${{ vars.ACI_GROUP_NAME }}' \
             --query ipAddress.fqdn -o tsv)"
-          echo "fqdn=$FQDN"        >> "$GITHUB_OUTPUT"
-          echo "ui=http://$FQDN/"  >> "$GITHUB_OUTPUT"
+          echo "fqdn=$FQDN"         >> "$GITHUB_OUTPUT"
+          echo "ui=https://$FQDN/"  >> "$GITHUB_OUTPUT"
 
       # Deploying is not the same as working. This fails the run if the stack
       # comes up unhealthy, rather than reporting a green tick on a broken app.
@@ -168,9 +183,37 @@ jobs:
             sleep 15
           done
 
-          echo "Checking the UI is served..."
-          curl -sf --max-time 10 -o /dev/null "http://$FQDN/" \
-            || { echo "::error::UI did not respond"; exit 1; }
+          echo "Checking the UI is served over plain HTTP..."
+          curl -sf --max-time 10 -o /dev/null "http://$FQDN:8080/" \
+            || { echo "::error::UI did not respond on 8080"; exit 1; }
+
+          # Certificate issuance is the slow, flaky part of a deploy — it
+          # depends on Let's Encrypt reaching us and on rate limits we do not
+          # control. Given its own generous wait and its own error message, so
+          # a TLS problem never gets mistaken for a broken application.
+          echo "Waiting for Caddy to obtain a certificate..."
+          tls_ok=""
+          for attempt in $(seq 1 30); do
+            if curl -sf --max-time 10 -o /dev/null "https://$FQDN/"; then
+              echo "HTTPS live after ~$((attempt * 10))s"
+              tls_ok=1
+              break
+            fi
+            sleep 10
+          done
+
+          if [ -z "$tls_ok" ]; then
+            echo "::warning::HTTPS is not answering. Plain HTTP on :8080 and :8000 is up, so the app is fine — this is certificate issuance. Caddy logs follow."
+            az container logs --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+              --name "${{ vars.ACI_GROUP_NAME }}" --container-name caddy || true
+          else
+            echo "Certificate:"
+            curl -sv --max-time 10 -o /dev/null "https://$FQDN/" 2>&1 \
+              | grep -E "subject:|issuer:|expire" || true
+            echo "Checking the API through HTTPS..."
+            curl -sf --max-time 20 "https://$FQDN/api/stats" -o /dev/null \
+              || { echo "::error::API not reachable through the HTTPS origin"; exit 1; }
+          fi
 
           echo "Checking GeoJSON endpoints are valid JSON..."
           curl -sf --max-time 20 "http://$FQDN:8000/clusters.geojson" | python3 -c \
@@ -198,11 +241,13 @@ jobs:
             echo ""
             echo "| | |"
             echo "|---|---|"
-            echo "| UI | http://$FQDN/ |"
-            echo "| API docs | http://$FQDN:8000/docs |"
-            echo "| Stats | http://$FQDN:8000/stats |"
-            echo "| Signals GeoJSON | http://$FQDN:8000/signals.geojson |"
-            echo "| Groups GeoJSON | http://$FQDN:8000/clusters.geojson |"
+            echo "| **UI** | https://$FQDN/ |"
+            echo "| Signals GeoJSON | https://$FQDN/api/signals.geojson |"
+            echo "| Groups GeoJSON | https://$FQDN/api/clusters.geojson |"
+            echo "| API docs | https://$FQDN/api/docs |"
+            echo "| Stats | https://$FQDN/api/stats |"
+            echo ""
+            echo "Plain HTTP fallback: http://$FQDN:8080/ · API http://$FQDN:8000/"
             echo ""
             echo "Image tag \`${TAG}\`"
           } >> "$GITHUB_STEP_SUMMARY"
