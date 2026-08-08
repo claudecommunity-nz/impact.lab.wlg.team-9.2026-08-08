@@ -23,12 +23,12 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENV_FILE="$REPO_ROOT/deploy/azure/.azure-env"
-MONGO_URI_FILE="$REPO_ROOT/deploy/azure/.mongo-uri"
 
 LOCATION="${LOCATION:-australiaeast}"          # closest region to Wellington
 RESOURCE_GROUP="${RESOURCE_GROUP:-team9-signals-rg}"
 GROUP_NAME="${GROUP_NAME:-team9-signals}"
 APP_NAME="${APP_NAME:-team9-signals-github-deploy}"
+SECRET_NAME="${SECRET_NAME:-mongo-uri}"
 
 say()  { printf '\n\033[1m▸ %s\033[0m\n' "$*"; }
 note() { printf '  %s\n' "$*"; }
@@ -81,6 +81,10 @@ if [[ -z "${ACR_NAME:-}" ]]; then
   SUFFIX="$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   ACR_NAME="team9signals${SUFFIX}"
   DNS_LABEL="team9-signals-${SUFFIX}"
+  # Vault names are globally unique and max 24 characters. The random suffix
+  # also sidesteps Key Vault soft-delete: a deleted vault holds its name for 90
+  # days, so a re-bootstrap with a fixed name would collide with its own ghost.
+  KEY_VAULT_NAME="team9-kv-${SUFFIX}"
 fi
 
 say "Container registry $ACR_NAME"
@@ -105,11 +109,6 @@ fi
 # Creating the cluster is a web signup, so it is the one thing here that cannot
 # be scripted; this step collects the result and checks it works.
 say "MongoDB Atlas connection string"
-
-if [[ -z "${MONGO_URI:-}" && -f "$MONGO_URI_FILE" ]]; then
-  MONGO_URI="$(cat "$MONGO_URI_FILE")"
-  note "read from $(basename "$MONGO_URI_FILE")"
-fi
 
 if [[ -z "${MONGO_URI:-}" ]]; then
   cat <<'EOF'
@@ -153,9 +152,7 @@ else
   warn "docker not available, skipping the connection test"
 fi
 
-umask 077
-printf '%s' "$MONGO_URI" > "$MONGO_URI_FILE"
-note "saved to deploy/azure/.mongo-uri (gitignored, 0600) for local deploys"
+note "held in memory — it goes into Key Vault below, not onto disk"
 
 # --------------------------------------------------------------------------
 # 4. GitHub OIDC federation — no stored password anywhere
@@ -230,30 +227,132 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# 5. Save state and hand the values to GitHub
+# 5. Key Vault — the one place the connection string lives
+# --------------------------------------------------------------------------
+# Why bother, when the deploy pipeline could just as easily read a GitHub
+# secret: repo secrets are available to workflows on *any* branch, so anyone
+# with push access can write a workflow that prints them. The OIDC federation
+# is scoped to refs/heads/main, so a secret behind the vault needs a merge to
+# main to reach. It is also the rotation point and the audit trail.
+#
+# What it does not do: ACI has no native Key Vault reference for environment
+# variables, so the value is still injected into the container as a
+# secureValue. The vault is the source of truth, not a way to hide the value
+# from the running process.
+say "Key Vault $KEY_VAULT_NAME"
+
+if az keyvault show --name "$KEY_VAULT_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
+  note "already exists"
+else
+  # RBAC rather than the older access-policy model: it is the current default,
+  # and it means permissions are visible in the same place as everything else.
+  az keyvault create \
+    --name "$KEY_VAULT_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$LOCATION" \
+    --enable-rbac-authorization true \
+    --output none
+  note "created"
+fi
+
+VAULT_SCOPE="/subscriptions/$SUB_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.KeyVault/vaults/$KEY_VAULT_NAME"
+
+# The person running this needs write access to put the secret in. Creating a
+# vault does not grant it — under RBAC, being the vault's creator gives you
+# nothing on its contents.
+say "Granting yourself write access to the vault"
+ME_OBJECT_ID="$(az ad signed-in-user show --query id -o tsv 2>/dev/null || true)"
+if [[ -n "$ME_OBJECT_ID" ]]; then
+  if az role assignment list --assignee "$ME_OBJECT_ID" --scope "$VAULT_SCOPE" \
+       --query "[?roleDefinitionName=='Key Vault Secrets Officer'] | length(@)" -o tsv 2>/dev/null | grep -q '^[1-9]'; then
+    note "already granted"
+  else
+    az role assignment create \
+      --assignee-object-id "$ME_OBJECT_ID" \
+      --assignee-principal-type User \
+      --role "Key Vault Secrets Officer" \
+      --scope "$VAULT_SCOPE" \
+      --output none
+    note "granted"
+  fi
+else
+  warn "could not identify the signed-in user (are you logged in as a service principal?)"
+  warn "grant yourself 'Key Vault Secrets Officer' on $KEY_VAULT_NAME manually if the next step fails"
+fi
+
+say "Granting the deploy identity read access to the vault"
+if az role assignment list --assignee "$SP_OBJECT_ID" --scope "$VAULT_SCOPE" \
+     --query "[?roleDefinitionName=='Key Vault Secrets User'] | length(@)" -o tsv 2>/dev/null | grep -q '^[1-9]'; then
+  note "already granted"
+else
+  az role assignment create \
+    --assignee-object-id "$SP_OBJECT_ID" \
+    --assignee-principal-type ServicePrincipal \
+    --role "Key Vault Secrets User" \
+    --scope "$VAULT_SCOPE" \
+    --output none
+  note "granted (read-only — the workflow can read secrets, not write them)"
+fi
+
+say "Storing the connection string as '$SECRET_NAME'"
+# RBAC assignments take a little while to reach the data plane. Writing
+# immediately after granting reliably fails with 403 the first time or two,
+# which looks like a permissions mistake and is not.
+for attempt in 1 2 3 4 5 6; do
+  if az keyvault secret set \
+       --vault-name "$KEY_VAULT_NAME" \
+       --name "$SECRET_NAME" \
+       --value "$MONGO_URI" \
+       --output none 2>/dev/null; then
+    note "stored"
+    break
+  fi
+  if [[ $attempt -eq 6 ]]; then
+    fail "could not write the secret — check you have 'Key Vault Secrets Officer' on $KEY_VAULT_NAME"
+  fi
+  note "waiting for the role assignment to reach the data plane (attempt $attempt)"
+  sleep 10
+done
+
+# --------------------------------------------------------------------------
+# 6. Save state and hand the values to GitHub
 # --------------------------------------------------------------------------
 cat > "$ENV_FILE" <<EOF
 # Generated by bootstrap.sh — delete to start a fresh deployment.
+# Names only. The connection string is in Key Vault, not here.
 RESOURCE_GROUP=$RESOURCE_GROUP
 ACR_NAME=$ACR_NAME
 GROUP_NAME=$GROUP_NAME
 DNS_LABEL=$DNS_LABEL
+KEY_VAULT_NAME=$KEY_VAULT_NAME
+SECRET_NAME=$SECRET_NAME
 LOCATION=$LOCATION
 EOF
 
+# Nothing below is a credential. The three "secrets" are Azure identifiers —
+# they are secrets by convention, and useless without the OIDC federation,
+# which is bound to this repo's main branch.
 say "GitHub configuration"
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   gh secret set AZURE_CLIENT_ID       --repo "$REPO_SLUG" --body "$APP_ID"    >/dev/null
   gh secret set AZURE_TENANT_ID       --repo "$REPO_SLUG" --body "$TENANT_ID" >/dev/null
   gh secret set AZURE_SUBSCRIPTION_ID --repo "$REPO_SLUG" --body "$SUB_ID"    >/dev/null
-  gh secret set MONGO_URI             --repo "$REPO_SLUG" --body "$MONGO_URI" >/dev/null
 
   gh variable set AZURE_RESOURCE_GROUP --repo "$REPO_SLUG" --body "$RESOURCE_GROUP" >/dev/null
   gh variable set AZURE_ACR_NAME       --repo "$REPO_SLUG" --body "$ACR_NAME"       >/dev/null
   gh variable set AZURE_LOCATION       --repo "$REPO_SLUG" --body "$LOCATION"       >/dev/null
   gh variable set ACI_GROUP_NAME       --repo "$REPO_SLUG" --body "$GROUP_NAME"     >/dev/null
   gh variable set ACI_DNS_LABEL        --repo "$REPO_SLUG" --body "$DNS_LABEL"      >/dev/null
+  gh variable set AZURE_KEY_VAULT_NAME --repo "$REPO_SLUG" --body "$KEY_VAULT_NAME" >/dev/null
+  gh variable set MONGO_SECRET_NAME    --repo "$REPO_SLUG" --body "$SECRET_NAME"    >/dev/null
   note "secrets and variables set on $REPO_SLUG"
+
+  # Left over from the previous design, where the connection string was a repo
+  # secret. Remove it so there is exactly one copy, in the vault.
+  if gh secret list --repo "$REPO_SLUG" 2>/dev/null | grep -q '^MONGO_URI'; then
+    gh secret delete MONGO_URI --repo "$REPO_SLUG" >/dev/null 2>&1 \
+      && note "removed the old MONGO_URI repo secret — it lives in Key Vault now"
+  fi
 else
   warn "gh CLI not available or not authenticated — set these by hand:"
   cat <<EOF
@@ -262,7 +361,6 @@ else
     AZURE_CLIENT_ID        $APP_ID
     AZURE_TENANT_ID        $TENANT_ID
     AZURE_SUBSCRIPTION_ID  $SUB_ID
-    MONGO_URI              (the Atlas connection string you pasted above)
 
   Repository variables (same page → Variables):
     AZURE_RESOURCE_GROUP   $RESOURCE_GROUP
@@ -270,6 +368,10 @@ else
     AZURE_LOCATION         $LOCATION
     ACI_GROUP_NAME         $GROUP_NAME
     ACI_DNS_LABEL          $DNS_LABEL
+    AZURE_KEY_VAULT_NAME   $KEY_VAULT_NAME
+    MONGO_SECRET_NAME      $SECRET_NAME
+
+  There is deliberately no MONGO_URI secret — delete it if one is still there.
 EOF
 fi
 

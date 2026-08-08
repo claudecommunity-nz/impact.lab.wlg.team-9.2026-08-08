@@ -69,10 +69,10 @@ Azure account. There's a password-based fallback in
 ```
 
 Two or three minutes. It creates the resource group, the container registry,
-the app registration with GitHub OIDC federation, and a Contributor role
-assignment scoped to that one resource group. It then asks you to paste the
-Atlas connection string, **tests it before saving**, and writes everything into
-the GitHub repo as secrets and variables via the `gh` CLI.
+the app registration with GitHub OIDC federation, a Contributor role assignment
+scoped to that one resource group, and a Key Vault. It asks you to paste the
+Atlas connection string, **tests it before storing**, puts it in the vault, and
+writes the non-secret names into the GitHub repo as variables via the `gh` CLI.
 
 Testing the connection there is deliberate: a wrong password and a missing
 network-access entry produce the same symptom half an hour later — containers
@@ -110,12 +110,51 @@ up, not that `az` returned zero. URLs land in the run summary.
 ./deploy/azure/deploy.sh logs      # recent logs from api, scrapers, enrichment
 ./deploy/azure/deploy.sh logs api  # follow one container
 ./deploy/azure/deploy.sh           # deploy uncommitted local changes
+./deploy/azure/deploy.sh rotate    # replace the database connection string
 ./deploy/azure/deploy.sh stop      # delete the group, keep the data — stops compute billing
 ./deploy/azure/deploy.sh destroy   # delete the Azure resources
 ```
 
 `destroy` doesn't touch Atlas. Delete that cluster in the Atlas UI if you want
 it gone.
+
+## Where the secrets live
+
+| | Stored where | Notes |
+|---|---|---|
+| Atlas connection string | **Azure Key Vault**, secret `mongo-uri` | The only copy. Never written to disk, never a GitHub secret |
+| Registry password | Nowhere persistent | Fetched fresh from `az acr credential show` each deploy |
+| Azure deploy credential | **Nowhere** | OIDC mints a short-lived token per workflow run |
+| Azure client / tenant / subscription IDs | GitHub repo secrets | Identifiers, not credentials — useless without the OIDC federation |
+
+The connection string was a GitHub repo secret in an earlier version of this.
+It moved because **repo secrets are readable by a workflow on any branch**, so
+anyone with push access could print one. The OIDC federation is scoped to
+`refs/heads/main`, so reading the vault now takes a merge. `bootstrap.sh`
+deletes the old `MONGO_URI` repo secret if it finds one.
+
+Rotating it:
+
+```bash
+./deploy/azure/deploy.sh rotate    # prompts, tests, stores a new version
+./deploy/azure/deploy.sh           # redeploy to pick it up
+```
+
+Key Vault keeps the previous value as an earlier version, so a bad rotation is
+recoverable with `az keyvault secret list-versions`.
+
+**What Key Vault does not do here.** ACI has no native Key Vault reference for
+environment variables — App Service and Container Apps do, ACI doesn't. So the
+deploy pipeline reads the secret and injects it as a `secureValue`, which means
+it is still an environment variable inside the running container, readable by
+anyone who can `az container exec` into the group. The vault is the source of
+truth, the rotation point and the audit trail; it is not a way to hide the
+value from the process that needs it.
+
+The rendered container-group definition holds both the registry password and
+the connection string in plaintext. It is written to a `0600` file in a temp
+directory and deleted when the script exits, including on interrupt — it is no
+longer left in the repo as `aci.generated.yaml`.
 
 ## What runs where
 
@@ -136,6 +175,7 @@ always deletes and recreates the group — keeps the data.
 | Container group (1.75 vCPU, 3.5 GB) | ~US$0.05/hr, ~$1.20/day, billed per second while running |
 | MongoDB Atlas M0 | $0, and not on your Azure bill at all |
 | Container registry (Basic) | ~US$0.17/day |
+| Key Vault (standard) | ~US$0.03 per 10,000 operations — a few reads a day rounds to nothing |
 | Egress, logs | negligible |
 
 So roughly **$1.40/day while it's running**, and the compute part stops the
@@ -166,6 +206,13 @@ looks like a network problem and isn't.
 **Only one port set per group.** Everything shares one public IP. The group
 exposes 80 for the UI and 8000 for the API, and two containers cannot both
 listen on the same port.
+
+**Key Vault RBAC takes a minute to bite.** Creating a vault grants you nothing
+on its contents, and a role assignment doesn't reach the data plane
+immediately — writing a secret straight after granting yourself access fails
+with a 403 that looks like a permissions mistake and isn't. `bootstrap.sh`
+retries for a minute. Also: a deleted vault holds its name for 90 days under
+soft-delete, which is why the name carries a random suffix.
 
 ## If you cannot create an app registration
 
