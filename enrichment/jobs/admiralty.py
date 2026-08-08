@@ -6,7 +6,12 @@ source reliability A–F × information credibility 1–6.
 Note on eventual consistency for clusters:
 The corroborate job rebuilds db.clusters from scratch every tick
 (delete_many + insert_many), so any admiralty stamp on a cluster is wiped
-and must simply be re-stamped on the next admiralty tick.
+and must simply be re-stamped on the next admiralty tick. Human
+field-verifications are kept in their own collection (db.verifications) for
+that reason, and are re-joined onto clusters here on every tick.
+
+Credibility 1 ("Confirmed by other sources") is never assigned by software.
+It appears only where a person has field-verified the cluster.
 """
 
 import logging
@@ -122,8 +127,14 @@ def grade_signal(doc: dict) -> dict:
     }
 
 
-def grade_cluster(cluster: dict, members: list[dict]) -> dict:
-    """Stamp Admiralty Code grading for a cluster document based on member signals."""
+def grade_cluster(cluster: dict, members: list[dict], verification: dict | None = None) -> dict:
+    """Stamp Admiralty Code grading for a cluster document based on member signals.
+
+    `verification` is a record from db.verifications, present only when a person
+    has field-verified this cluster. It is the sole route to credibility 1:
+    reliability still describes the source, credibility now records that a human
+    went and looked.
+    """
     if members:
         member_rels = [source_reliability(m.get("source") or {}) for m in members]
         best_rel, best_rel_rat = min(member_rels, key=lambda r: _REL_RANK.get(r[0], 5))
@@ -132,8 +143,21 @@ def grade_cluster(cluster: dict, members: list[dict]) -> dict:
         best_rel = "F"
         rel_rat = "no cluster members → default reliability F"
 
-    corrob = cluster.get("corroboration")
-    cred, cred_rat = info_credibility(corrob, best_rel)
+    if verification is not None:
+        cred = 1
+        by_role = verification.get("by_role") or "council officer"
+        cred_rat = f"field-verified by {by_role} → 1"
+        note = (
+            "Field-verified by a person. Credibility 1 records that human "
+            "confirmation, not an automated judgement."
+        )
+    else:
+        corrob = cluster.get("corroboration")
+        cred, cred_rat = info_credibility(corrob, best_rel)
+        note = (
+            "Automated Admiralty grading. Credibility 1 (confirmed) is never assigned "
+            "by this pipeline — confirmation is a human decision."
+        )
 
     return {
         "grade": f"{best_rel}{cred}",
@@ -141,10 +165,7 @@ def grade_cluster(cluster: dict, members: list[dict]) -> dict:
         "info_credibility": cred,
         "meaning": f"{RELIABILITY_MEANING[best_rel]} · {CREDIBILITY_MEANING[cred]}",
         "rationale": [rel_rat, cred_rat],
-        "note": (
-            "Automated Admiralty grading. Credibility 1 (confirmed) is never assigned "
-            "by this pipeline — confirmation is a human decision."
-        ),
+        "note": note,
         "method": VERSION,
         "version": VERSION,
     }
@@ -164,6 +185,11 @@ def run(db) -> dict:
         sig_count += 1
 
     # 2. Clusters
+    # Verifications live in their own collection precisely so they survive the
+    # corroborate rebuild; re-joining them here is what makes a human's decision
+    # stick across ticks.
+    verifications = {v["cluster_id"]: v for v in db.verifications.find({})}
+
     cluster_cursor = db.clusters.find({})
     cluster_count = 0
     for cluster in cluster_cursor:
@@ -172,9 +198,14 @@ def run(db) -> dict:
             members = list(db.signals.find({"signal_id": {"$in": signal_ids}}, {"source": 1, "enrichment.corroborate": 1}))
         else:
             members = []
-        stamp = grade_cluster(cluster, members)
+        verification = verifications.get(cluster.get("cluster_id"))
+        stamp = grade_cluster(cluster, members, verification)
         stamp["at"] = now
-        db.clusters.update_one({"_id": cluster["_id"]}, {"$set": {"admiralty": stamp}})
+        update = {"admiralty": stamp}
+        if verification:
+            update["verification_status"] = "field_verified"
+            update["verified_note"] = verification.get("note", "")
+        db.clusters.update_one({"_id": cluster["_id"]}, {"$set": update})
         cluster_count += 1
 
     if sig_count or cluster_count:
