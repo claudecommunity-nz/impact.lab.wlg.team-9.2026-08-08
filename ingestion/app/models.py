@@ -69,6 +69,22 @@ class SignalBatch(BaseModel):
     signals: list[SignalIn]
 
 
+class CitizenReportIn(BaseModel):
+    """What the public submission form sends.
+
+    Deliberately smaller and stricter than SignalIn/SourceRef: nothing here
+    lets a caller claim to be a higher-trust source than "someone submitted
+    this through the public form" — `source` is stamped server-side instead
+    of accepted from the request.
+    """
+
+    text: str = Field(..., min_length=5, max_length=2000)
+    location_text: str | None = Field(None, max_length=200)
+    lat: float | None = Field(None, ge=-90, le=90)
+    lon: float | None = Field(None, ge=-180, le=180)
+    contact: str | None = Field(None, max_length=200)
+
+
 class IngestResult(BaseModel):
     received: int
     inserted: int

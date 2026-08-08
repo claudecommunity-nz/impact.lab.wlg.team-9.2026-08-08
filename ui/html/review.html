@@ -194,6 +194,7 @@ main { padding: 16px; max-width: 1100px; margin: 0 auto; }
     <a href="/">Map</a>
     <a href="/review.html" class="active">Verify signals</a>
     <a href="/verified.html">Verified</a>
+    <a href="/submit.html">Submit a report</a>
   </nav>
 
   <div class="warning-strip" role="note">
@@ -217,6 +218,7 @@ main { padding: 16px; max-width: 1100px; margin: 0 auto; }
 <div class="filters">
   <label><input type="checkbox" id="f-mastodon" checked> Mastodon</label>
   <label><input type="checkbox" id="f-rss" checked> RSS / news</label>
+  <label><input type="checkbox" id="f-citizen" checked> Public reports</label>
   <label><input type="checkbox" id="f-screenshot" checked> Shared screenshots</label>
   <label>Time
     <select id="f-since">
@@ -240,6 +242,12 @@ main { padding: 16px; max-width: 1100px; margin: 0 auto; }
 <script>
 const API = "/api";
 const label = (s) => (s || "unclassified").replace(/_/g, " ");
+
+// Every signal here can now originate from a public submission form, not
+// just scraped feeds — title/text/place are free text someone typed, so they
+// go through this before ever landing in innerHTML.
+const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ESC[c]);
 
 const reviewerInput = document.getElementById("f-reviewer");
 reviewerInput.value = localStorage.getItem("reviewer_name") || "";
@@ -275,6 +283,7 @@ function sourceTypes() {
   const types = [];
   if (document.getElementById("f-mastodon").checked) types.push("mastodon");
   if (document.getElementById("f-rss").checked) types.push("rss");
+  if (document.getElementById("f-citizen").checked) types.push("citizen_report");
   if (document.getElementById("f-screenshot").checked) types.push("screenshot");
   return types;
 }
@@ -325,13 +334,13 @@ function renderCard(s) {
     ${mediaBlock(s)}
     <div class="card-body">
       <div class="card-meta">
-        <span>${s.source.name}</span>
+        <span>${esc(s.source.name)}</span>
         <span>${timeAgo(s.published_at || s.ingested_at)}</span>
         <span class="chip">${label(cls.issue_type)}</span>
-        <span class="chip">${geo.place || "location uncertain"}</span>
+        <span class="chip">${esc(geo.place) || "location uncertain"}</span>
         ${!s.media || !s.media.length ? `<span class="chip no-media">no media</span>` : ""}
       </div>
-      <div class="card-text">${s.title ? `<strong>${s.title}</strong>` : ""}${text}</div>
+      <div class="card-text">${s.title ? `<strong>${esc(s.title)}</strong>` : ""}${esc(text)}</div>
       ${s.url ? `<a class="original" href="${s.url}" target="_blank" rel="noopener noreferrer">Open original &nearr;</a>` : ""}
       <div class="actions">
         <button class="confirm" data-action="verify">&check; Looks plausible</button>
@@ -397,7 +406,7 @@ async function refresh() {
   }
 }
 
-["f-mastodon", "f-rss", "f-screenshot", "f-since"].forEach((id) =>
+["f-mastodon", "f-rss", "f-citizen", "f-screenshot", "f-since"].forEach((id) =>
   document.getElementById(id).addEventListener("change", refresh)
 );
 
