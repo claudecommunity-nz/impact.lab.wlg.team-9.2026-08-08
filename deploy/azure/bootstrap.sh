@@ -36,6 +36,42 @@ warn() { printf '\033[33m  ! %s\033[0m\n' "$*"; }
 fail() { printf '\n\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
 # --------------------------------------------------------------------------
+# This script asks for a secret, so it wants a real terminal. Without one,
+# `read` hits EOF and `set -e` exits with no explanation at all — which looks
+# like a crash rather than a missing prompt. Say what happened instead.
+# --------------------------------------------------------------------------
+NONINTERACTIVE="${BOOTSTRAP_NONINTERACTIVE:-0}"
+
+if [[ ! -t 0 && "$NONINTERACTIVE" != "1" ]]; then
+  cat >&2 <<'EOF'
+
+✗ No terminal attached, so this cannot prompt you.
+
+  Run it from a terminal window:
+
+      cd <repo>
+      ./deploy/azure/bootstrap.sh
+
+  That matters here beyond convenience: the script asks for the Atlas
+  connection string, and a real terminal reads it hidden and keeps it out of
+  your shell history.
+
+  To run it unattended anyway (CI, or a wrapper script):
+
+      BOOTSTRAP_NONINTERACTIVE=1 MONGO_URI='mongodb+srv://...' ./deploy/azure/bootstrap.sh
+
+  That form takes the connection string from the environment and skips every
+  confirmation, so make sure the account below is the one you want billed.
+
+EOF
+  exit 1
+fi
+
+if [[ "$NONINTERACTIVE" == "1" && -z "${MONGO_URI:-}" ]]; then
+  fail "BOOTSTRAP_NONINTERACTIVE=1 needs MONGO_URI set in the environment"
+fi
+
+# --------------------------------------------------------------------------
 # 0. Confirm we are pointed at the right Azure account
 # --------------------------------------------------------------------------
 az account show >/dev/null 2>&1 || fail "not logged in — run: az login"
@@ -59,8 +95,14 @@ EOF
 
 # Asked explicitly because the hosting account is often not the one the machine
 # is normally signed in to, and az silently uses whichever was last used.
-read -r -p "Is that the right account? Type yes to continue: " confirm
-[[ "$confirm" == "yes" ]] || fail "stopped. Run 'az login' as the hosting account, or 'az account set --subscription <id>'."
+if [[ "$NONINTERACTIVE" != "1" ]]; then
+  read -r -p "Is that the right account? Type yes to continue: " confirm \
+    || fail "no input received"
+  [[ "$confirm" == "yes" ]] \
+    || fail "stopped. Run 'az login' as the hosting account, or 'az account set --subscription <id>'."
+else
+  note "non-interactive: proceeding with the account above"
+fi
 
 # --------------------------------------------------------------------------
 # 1. Resource group
@@ -120,7 +162,7 @@ if [[ -z "${MONGO_URI:-}" ]]; then
     mongodb+srv://USER:PASSWORD@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority
 
 EOF
-  read -r -s -p "  Paste it (hidden): " MONGO_URI
+  read -r -s -p "  Paste it (hidden): " MONGO_URI || fail "no input received"
   echo
 fi
 
@@ -145,7 +187,11 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     warn "  1. Network Access in Atlas does not allow 0.0.0.0/0"
     warn "  2. the password is wrong, or has unescaped special characters"
     warn "  3. the database user has no read/write role"
-    read -r -p "  Continue anyway? Type yes: " ignore_conn
+    # Fails closed when unattended. Storing a connection string that does not
+    # work only moves the failure to the smoke test, twenty minutes later.
+    [[ "$NONINTERACTIVE" != "1" ]] \
+      || fail "connection test failed — refusing to store a string that does not work"
+    read -r -p "  Continue anyway? Type yes: " ignore_conn || fail "no input received"
     [[ "$ignore_conn" == "yes" ]] || fail "stopped — fix the connection and re-run"
   fi
 else

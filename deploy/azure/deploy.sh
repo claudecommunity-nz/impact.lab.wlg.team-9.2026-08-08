@@ -138,8 +138,9 @@ cmd_logs() {
 
 cmd_rotate() {
   say "Replacing '$SECRET_NAME' in Key Vault $KEY_VAULT_NAME"
+  [[ -t 0 ]] || fail "no terminal attached — run this from a terminal window so the string stays out of your shell history"
   echo "  Paste the new Atlas connection string (input hidden)."
-  read -r -s -p "  > " new_uri
+  read -r -s -p "  > " new_uri || fail "no input received"
   echo
 
   [[ -n "$new_uri" ]] || fail "nothing entered"
@@ -172,7 +173,8 @@ cmd_stop() {
 cmd_destroy() {
   say "This deletes $RESOURCE_GROUP and everything in it."
   say "The Atlas cluster is not touched — delete that in the Atlas UI if you want it gone."
-  read -r -p "Type the resource group name to confirm: " confirm
+  [[ -t 0 ]] || fail "no terminal attached — run this from a terminal window so the confirmation actually confirms something"
+  read -r -p "Type the resource group name to confirm: " confirm || fail "no input received"
   [[ "$confirm" == "$RESOURCE_GROUP" ]] || fail "stopped"
   az group delete --name "$RESOURCE_GROUP" --yes --no-wait
   rm -f "$ENV_FILE" "${STALE_FILES[@]}"
