@@ -28,6 +28,13 @@ for var in LOCATION GROUP_NAME DNS_LABEL ACR_SERVER ACR_USERNAME ACR_PASSWORD \
   fi
 done
 
+# Optional. An absent credential must not block a deploy — the collector that
+# needs it reports itself as skipped on the dashboard, which is visible and
+# recoverable, whereas a failed deploy takes the whole site with it.
+export REDDIT_API_KEY="${REDDIT_API_KEY:-}"
+export SIM_ANCHOR="${SIM_ANCHOR:-2026-04-20T00:00:00Z}"
+export SIM_REAL_ANCHOR="${SIM_REAL_ANCHOR:-2026-08-08T00:00:00Z}"
+
 # Substituted in Python, not sed: a MongoDB connection string routinely
 # contains & and /, both of which mean something to sed's replacement syntax
 # and would corrupt the value silently.
@@ -37,7 +44,8 @@ import os
 placeholders = [
     "LOCATION", "GROUP_NAME", "DNS_LABEL", "ACR_SERVER", "ACR_USERNAME",
     "ACR_PASSWORD", "TAG", "MONGO_URI", "DEPLOY_SOURCE", "FQDN",
-    "STORAGE_ACCOUNT", "STORAGE_KEY",
+    "STORAGE_ACCOUNT", "STORAGE_KEY", "REDDIT_API_KEY",
+    "SIM_ANCHOR", "SIM_REAL_ANCHOR",
 ]
 
 with open(os.environ["TEMPLATE_PATH"]) as fh:

@@ -94,6 +94,23 @@ jobs:
           echo "::add-mask::$MONGO_URI"
           echo "MONGO_URI=$MONGO_URI" >> "$GITHUB_ENV"
 
+      # Optional, unlike the database. A missing key means the Reddit collector
+      # reports itself skipped on the pipeline dashboard — visible and fixable
+      # — which beats refusing to deploy the whole site over one source.
+      - name: Read the Reddit corpus key from Key Vault
+        run: |
+          REDDIT_API_KEY="$(az keyvault secret show \
+            --vault-name '${{ vars.AZURE_KEY_VAULT_NAME }}' \
+            --name '${{ vars.REDDIT_SECRET_NAME || 'reddit-api-key' }}' \
+            --query value -o tsv 2>/dev/null || true)"
+          if [ -n "$REDDIT_API_KEY" ]; then
+            echo "::add-mask::$REDDIT_API_KEY"
+            echo "Reddit corpus key found"
+          else
+            echo "::notice::No reddit-api-key in Key Vault — the Reddit collector will report as skipped."
+          fi
+          echo "REDDIT_API_KEY=$REDDIT_API_KEY" >> "$GITHUB_ENV"
+
       - name: Read the registry credentials
         run: |
           ACR_PASSWORD="$(az acr credential show \

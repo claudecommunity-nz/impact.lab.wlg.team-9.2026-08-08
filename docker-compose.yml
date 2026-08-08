@@ -78,6 +78,25 @@ services:
       SCRAPE_INTERVAL_SECONDS: ${MASTODON_INTERVAL:-300}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
+  # Synthetic Reddit corpus, replayed on a clock shifted back to the event
+  # window. REDDIT_API_KEY is not in this repo: pull it from Key Vault into
+  # your shell, or put it in .env, which is gitignored.
+  #
+  #   export REDDIT_API_KEY="$(az keyvault secret show \
+  #     --vault-name team9-kv-f76f44cb --name reddit-api-key --query value -o tsv)"
+  #
+  # Without it the collector reports itself as skipped rather than failing.
+  scraper-reddit:
+    <<: *scraper
+    environment:
+      INGESTION_URL: http://api:8000
+      SOURCES: reddit
+      SCRAPE_INTERVAL_SECONDS: ${REDDIT_INTERVAL:-300}
+      REDDIT_API_KEY: ${REDDIT_API_KEY:-}
+      SIM_ANCHOR: ${SIM_ANCHOR:-2026-04-20T00:00:00Z}
+      SIM_REAL_ANCHOR: ${SIM_REAL_ANCHOR:-2026-08-08T00:00:00Z}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
   # Replays a bundled fixture file. Runs once, then idles. Guarantees the demo
   # has data even with no network.
   scraper-fixtures:
