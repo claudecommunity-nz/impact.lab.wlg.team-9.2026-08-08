@@ -114,7 +114,7 @@ services:
     restart: unless-stopped
     environment:
       <<: *mongo
-      ENRICHMENT_SCHEDULE: ${ENRICHMENT_SCHEDULE:-classify:30,geolocate:30,corroborate:60,admiralty:60}
+      ENRICHMENT_SCHEDULE: ${ENRICHMENT_SCHEDULE:-classify:30,geolocate:30,corroborate:60,admiralty:60,prioritise:60}
       CLUSTER_RADIUS_KM: ${CLUSTER_RADIUS_KM:-2.0}
       CLUSTER_WINDOW_HOURS: ${CLUSTER_WINDOW_HOURS:-12}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}

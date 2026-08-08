@@ -93,7 +93,7 @@ properties:
           # in Azure — enrichment/run.py logs a warning naming any job in the
           # registry that this line forgot.
           - name: ENRICHMENT_SCHEDULE
-            value: classify:30,geolocate:30,corroborate:60,admiralty:60
+            value: classify:30,geolocate:30,corroborate:60,admiralty:60,prioritise:60
           - name: CLUSTER_RADIUS_KM
             value: "2.0"
           - name: CLUSTER_WINDOW_HOURS

@@ -29,7 +29,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("enrichment")
 
-DEFAULT_SCHEDULE = "classify:30,geolocate:30,corroborate:60"
+DEFAULT_SCHEDULE = "classify:30,geolocate:30,corroborate:60,admiralty:60,prioritise:60"
 TICK = 5  # seconds between due-checks
 
 
