@@ -8,7 +8,9 @@
 #   ./deploy/azure/deploy.sh          build and deploy
 #   ./deploy/azure/deploy.sh status   state and public URLs
 #   ./deploy/azure/deploy.sh logs     recent logs
-#   ./deploy/azure/deploy.sh rotate   replace the database connection string
+#   ./deploy/azure/deploy.sh secret <name>   store a secret in Key Vault
+#   ./deploy/azure/deploy.sh secrets         list what is in the vault
+#   ./deploy/azure/deploy.sh rotate          replace the database connection string
 #   ./deploy/azure/deploy.sh stop     delete the container group, keep the data
 #   ./deploy/azure/deploy.sh destroy  delete the Azure resources
 #
@@ -42,6 +44,7 @@ source "$ENV_FILE"
 [[ -n "${STORAGE_ACCOUNT:-}" ]] \
   || fail "$ENV_FILE predates the HTTPS change — re-run ./deploy/azure/bootstrap.sh to add the certificate storage"
 SECRET_NAME="${SECRET_NAME:-mongo-uri}"
+REDDIT_SECRET_NAME="${REDDIT_SECRET_NAME:-reddit-api-key}"
 
 TAG="${TAG:-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo latest)}"
 
@@ -80,7 +83,17 @@ cmd_deploy() {
     --account-name "$STORAGE_ACCOUNT" --resource-group "$RESOURCE_GROUP" \
     --query '[0].value' -o tsv 2>/dev/null)" \
     || fail "could not read the storage key for '$STORAGE_ACCOUNT' — re-run bootstrap.sh"
-  export ACR_SERVER ACR_USERNAME ACR_PASSWORD MONGO_URI STORAGE_ACCOUNT STORAGE_KEY
+  # Optional. Absent means the Reddit collector reports itself skipped on the
+  # dashboard, which is visible and fixable — better than refusing to deploy.
+  REDDIT_API_KEY="${REDDIT_API_KEY:-$(az keyvault secret show \
+    --vault-name "$KEY_VAULT_NAME" --name "$REDDIT_SECRET_NAME" \
+    --query value -o tsv 2>/dev/null || true)}"
+  if [[ -z "$REDDIT_API_KEY" ]]; then
+    say "No '$REDDIT_SECRET_NAME' in the vault — the Reddit collector will report as skipped"
+    say "Add it with:  $0 secret $REDDIT_SECRET_NAME"
+  fi
+
+  export ACR_SERVER ACR_USERNAME ACR_PASSWORD MONGO_URI STORAGE_ACCOUNT STORAGE_KEY REDDIT_API_KEY
 
   # The rendered file carries the registry password and the connection string
   # in plaintext, so it is created 0600 in a temp dir and removed on the way
@@ -145,32 +158,44 @@ cmd_logs() {
   fi
 }
 
-cmd_rotate() {
-  say "Replacing '$SECRET_NAME' in Key Vault $KEY_VAULT_NAME"
-  [[ -t 0 ]] || fail "no terminal attached — run this from a terminal window so the string stays out of your shell history"
-  echo "  Paste the new Atlas connection string (input hidden)."
-  read -r -s -p "  > " new_uri || fail "no input received"
+cmd_secret() {
+  local name="${1:-$SECRET_NAME}"
+  [[ -t 0 ]] || fail "no terminal attached — run this from a terminal window so the value stays out of your shell history"
+
+  say "Setting '$name' in Key Vault $KEY_VAULT_NAME"
+  echo "  Paste the value (input hidden)."
+  read -r -s -p "  > " value || fail "no input received"
   echo
+  [[ -n "$value" ]] || fail "nothing entered"
 
-  [[ -n "$new_uri" ]] || fail "nothing entered"
-  [[ "$new_uri" == mongodb+srv://* || "$new_uri" == mongodb://* ]] \
-    || fail "that does not look like a MongoDB connection string"
-  [[ "$new_uri" != *"<password>"* ]] || fail "the <password> placeholder is still in there"
-
-  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    say "Testing it before storing"
-    docker run --rm mongo:7 mongosh "$new_uri" --quiet \
-      --eval 'db.adminCommand({ping:1}).ok' 2>/dev/null | grep -q 1 \
-      || fail "could not connect with that string — nothing was changed"
-    say "Connected"
+  # The connection string is checked before it is stored, because a wrong one
+  # stays silent until containers are already up and failing. Other secrets
+  # have nothing meaningful to test against and are taken at face value.
+  if [[ "$name" == "$SECRET_NAME" ]]; then
+    [[ "$value" == mongodb+srv://* || "$value" == mongodb://* ]] \
+      || fail "that does not look like a MongoDB connection string"
+    [[ "$value" != *"<password>"* ]] || fail "the <password> placeholder is still in there"
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+      say "Testing it before storing"
+      docker run --rm mongo:7 mongosh "$value" --quiet \
+        --eval 'db.adminCommand({ping:1}).ok' 2>/dev/null | grep -q 1 \
+        || fail "could not connect with that string — nothing was changed"
+      say "Connected"
+    fi
   fi
 
-  az keyvault secret set --vault-name "$KEY_VAULT_NAME" --name "$SECRET_NAME" \
-    --value "$new_uri" --output none
-  # Key Vault keeps the old value as a previous version, so a bad rotation is
-  # recoverable: az keyvault secret list-versions --vault-name ... --name ...
+  az keyvault secret set --vault-name "$KEY_VAULT_NAME" --name "$name" \
+    --value "$value" --output none
+  # Key Vault keeps the previous value as an earlier version, so a bad change
+  # is recoverable: az keyvault secret list-versions --vault-name ... --name ...
   say "Stored as a new version. The running containers still hold the old value."
   say "Apply it with:  $0"
+}
+
+cmd_secrets() {
+  say "Secrets in $KEY_VAULT_NAME"
+  az keyvault secret list --vault-name "$KEY_VAULT_NAME" \
+    --query "[].{name:name, updated:attributes.updated}" -o table
 }
 
 cmd_stop() {
@@ -194,8 +219,10 @@ case "${1:-deploy}" in
   deploy)  cmd_deploy ;;
   status)  cmd_status ;;
   logs)    shift; cmd_logs "${1:-}" ;;
-  rotate)  cmd_rotate ;;
+  secret)  shift; cmd_secret "${1:-}" ;;
+  secrets) cmd_secrets ;;
+  rotate)  cmd_secret "$SECRET_NAME" ;;
   stop)    cmd_stop ;;
   destroy) cmd_destroy ;;
-  *)       fail "unknown command: $1 (deploy | status | logs [container] | rotate | stop | destroy)" ;;
+  *)       fail "unknown command: $1 (deploy | status | logs [container] | secret <name> | secrets | rotate | stop | destroy)" ;;
 esac

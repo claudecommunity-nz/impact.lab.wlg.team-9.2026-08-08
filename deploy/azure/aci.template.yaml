@@ -90,11 +90,24 @@ properties:
           # docker-compose.yml deliberately keeps it: offline development is
           # exactly the case it was written for.
           - name: SOURCES
-            value: rss,geonet,mastodon
+            value: rss,geonet,mastodon,reddit
           - name: SCRAPE_INTERVAL_SECONDS
             value: "600"
           - name: LOG_LEVEL
             value: INFO
+          # Reddit corpus replay. The key lives in Key Vault and is read at
+          # deploy time; if it is absent the collector reports itself skipped
+          # on the dashboard rather than failing, so a missing credential
+          # never takes a deploy down.
+          - name: REDDIT_API_KEY
+            secureValue: __REDDIT_API_KEY__
+          # The corpus is historical, so the collector runs on a clock shifted
+          # back by the interval between these two anchors. Plain values, not
+          # secure ones — the whole point is that the shift is visible.
+          - name: SIM_ANCHOR
+            value: __SIM_ANCHOR__
+          - name: SIM_REAL_ANCHOR
+            value: __SIM_REAL_ANCHOR__
         resources:
           requests:
             cpu: 0.5
